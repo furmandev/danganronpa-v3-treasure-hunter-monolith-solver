@@ -71,7 +71,7 @@ const COLOR_CSS = {
     1: "#aaa", // gray
     2: "#e87aaf", // pink
     3: "#e8a832", // orange
-    4: "#5ba8e8" // blue
+    4: "#5ba8e8", // blue
 };
 
 function updateBoardText() {
@@ -121,7 +121,11 @@ function nextCalibration() {
     const assigned = CCHARS[parseResult.colorIds[idx]];
     const alt = CCHARS[parseResult.secondBests[idx]];
 
-    document.getElementById("cal-info").innerHTML = `<b>${calQueue.length}</b> cells to review &mdash; ` + `Row ${r + 1}, Col ${c + 1}: ` + `Guess: <b>${assigned}</b>, Alt: <b>${alt}</b>, ` + `Confidence: <b>${conf}%</b>`;
+    document.getElementById("cal-info").innerHTML =
+        `<b>${calQueue.length}</b> cells to review &mdash; ` +
+        `Row ${r + 1}, Col ${c + 1}: ` +
+        `Guess: <b>${assigned}</b>, Alt: <b>${alt}</b>, ` +
+        `Confidence: <b>${conf}%</b>`;
     document.getElementById("btn-solve").style.display = "none";
 
     drawCalCanvas(idx);
@@ -164,7 +168,11 @@ function drawCalCanvas(highlightIdx) {
     console.log(`[cal] cell r=${r} c=${c}, idx=${highlightIdx}`);
     console.log(`[cal] bTL=`, bTL, `bBR=`, bBR);
     console.log(`[cal] crop: x=${cropX} y=${cropY} w=${cropW} h=${cropH}`);
-    console.log(`[cal] imgElement:`, imgElement, `naturalSize: ${imgElement?.naturalWidth}x${imgElement?.naturalHeight}`);
+    console.log(
+        `[cal] imgElement:`,
+        imgElement,
+        `naturalSize: ${imgElement?.naturalWidth}x${imgElement?.naturalHeight}`,
+    );
 
     // Fixed canvas size so buttons don't jump around
     const CANVAS_W = 500,
@@ -256,7 +264,8 @@ function startSolve() {
     setTimeout(() => {
         try {
             solveResult = solve(grid, ROWS, COLS, maxStates, (explored, bestClear) => {
-                document.getElementById("progress").textContent = `${explored} states explored, best: ${bestClear.toFixed(1)}%`;
+                document.getElementById("progress").textContent =
+                    `${explored} states explored, best: ${bestClear.toFixed(1)}%`;
             });
 
             const pct = solveResult.clearRate.toFixed(1);
@@ -280,7 +289,7 @@ const spriteImages = {};
 let spritesLoaded = false;
 
 function loadSprites() {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
         let loaded = 0;
         for (let i = 0; i <= 4; i++) {
             const img = new Image();
@@ -295,7 +304,7 @@ function loadSprites() {
                 loaded++;
                 if (loaded === 5) resolve();
             };
-            img.src = `sprites/${i}.png`;
+            img.src = `src/sprites/${i}.png`;
             spriteImages[i] = img;
         }
     });
@@ -309,7 +318,7 @@ const FALLBACK_COLORS = {
     1: "#b0b0b0",
     2: "#e87aaf",
     3: "#e8a832",
-    4: "#5ba8e8"
+    4: "#5ba8e8",
 };
 
 function showStep() {
@@ -368,7 +377,7 @@ function nextStep() {
     }
 }
 
-document.addEventListener("keydown", e => {
+document.addEventListener("keydown", (e) => {
     if (e.key === "ArrowLeft") prevStep();
     if (e.key === "ArrowRight") nextStep();
 });

@@ -54,7 +54,8 @@ function selectBestPeaks(peaks, targetCount, totalSize) {
         const spacing = diffs[Math.floor(diffs.length / 2)];
         while (peaks.length < targetCount) {
             if (peaks[0] - spacing > 0) peaks.unshift(Math.round(peaks[0] - spacing));
-            else if (peaks[peaks.length - 1] + spacing < totalSize) peaks.push(Math.round(peaks[peaks.length - 1] + spacing));
+            else if (peaks[peaks.length - 1] + spacing < totalSize)
+                peaks.push(Math.round(peaks[peaks.length - 1] + spacing));
             else break;
         }
     }
@@ -105,9 +106,9 @@ function findGridLines(gray, w, h, cols, rows) {
 
     // Invert (grid lines are dark = peaks when inverted)
     const colMax = Math.max(...colProfile);
-    const colInv = colProfile.map(v => colMax - v);
+    const colInv = colProfile.map((v) => colMax - v);
     const rowMax = Math.max(...rowProfile);
-    const rowInv = rowProfile.map(v => rowMax - v);
+    const rowInv = rowProfile.map((v) => rowMax - v);
 
     let vPeaks = findPeaks(colInv, Math.floor(w / (cols + 6)), 2);
     let hPeaks = findPeaks(rowInv, Math.floor(h / (rows + 6)), 2);
@@ -115,8 +116,8 @@ function findGridLines(gray, w, h, cols, rows) {
     // Filter out peaks too close to image edges (border artifacts)
     const edgeMarginX = Math.floor(w * 0.01);
     const edgeMarginY = Math.floor(h * 0.02);
-    vPeaks = vPeaks.filter(x => x > edgeMarginX && x < w - edgeMarginX);
-    hPeaks = hPeaks.filter(y => y > edgeMarginY && y < h - edgeMarginY);
+    vPeaks = vPeaks.filter((x) => x > edgeMarginX && x < w - edgeMarginX);
+    hPeaks = hPeaks.filter((y) => y > edgeMarginY && y < h - edgeMarginY);
 
     console.log(`[grid] Raw peaks: ${vPeaks.length} vertical, ${hPeaks.length} horizontal`);
     console.log(`[grid] vPeaks: ${vPeaks.join(",")}`);
@@ -161,7 +162,7 @@ function findGridLines(gray, w, h, cols, rows) {
             strip[x] = cnt > 0 ? sum / cnt : 0;
         }
         const sMax = Math.max(...strip);
-        const stripInv = strip.map(v => sMax - v);
+        const stripInv = strip.map((v) => sMax - v);
 
         const row = [];
         for (let vi = 0; vi < vPeaks.length; vi++) {
@@ -198,7 +199,7 @@ function findGridLines(gray, w, h, cols, rows) {
             strip[y] = cnt > 0 ? sum / cnt : 0;
         }
         const sMax = Math.max(...strip);
-        const stripInv = strip.map(v => sMax - v);
+        const stripInv = strip.map((v) => sMax - v);
 
         for (let hi = 0; hi < hPeaks.length; hi++) {
             if (!hLines[hi]) hLines[hi] = [];
@@ -237,7 +238,7 @@ function getCellBounds(vLines, hLines, r, c) {
         xL: Math.min(xL, xR),
         yT: Math.min(yT, yB),
         xR: Math.max(xL, xR),
-        yB: Math.max(yT, yB)
+        yB: Math.max(yT, yB),
     };
 }
 
@@ -372,7 +373,7 @@ function kmeans4(data, maxIter) {
         if (cost < bestCost) {
             bestCost = cost;
             bestLabels = new Int32Array(labels);
-            bestCenters = centers.map(c => [...c]);
+            bestCenters = centers.map((c) => [...c]);
         }
     }
 
@@ -388,9 +389,9 @@ function dist3(a, b) {
 function assignClusterIds(centers, hsvRaw) {
     // centers[i] = weighted HSV center, hsvRaw[i] = unweighted HSV center
     // Gray = lowest saturation, then sort remaining by hue: orange < blue < pink
-    const sats = hsvRaw.map(c => c[1]);
+    const sats = hsvRaw.map((c) => c[1]);
     const grayIdx = sats.indexOf(Math.min(...sats));
-    const remaining = [0, 1, 2, 3].filter(i => i !== grayIdx);
+    const remaining = [0, 1, 2, 3].filter((i) => i !== grayIdx);
     remaining.sort((a, b) => hsvRaw[a][0] - hsvRaw[b][0]);
     // lowest hue = orange, mid = blue, highest = pink
     const mapping = {};
@@ -410,7 +411,7 @@ function classifyAll(weighted, centers) {
     const secondBests = new Int32Array(n);
 
     for (let i = 0; i < n; i++) {
-        const dists = centers.map(c => dist3(weighted[i], c));
+        const dists = centers.map((c) => dist3(weighted[i], c));
         const order = [0, 1, 2, 3].sort((a, b) => dists[a] - dists[b]);
         colorIds[i] = order[0] + 1; // 1-indexed
         secondBests[i] = order[1] + 1;
@@ -426,7 +427,7 @@ function computeCenters(weighted, colorIds) {
         [0, 0, 0],
         [0, 0, 0],
         [0, 0, 0],
-        [0, 0, 0]
+        [0, 0, 0],
     ];
     const counts = [0, 0, 0, 0];
     for (let i = 0; i < weighted.length; i++) {
@@ -471,7 +472,7 @@ function parseImage(imageData, w, h, cols, rows) {
         [0, 0, 0],
         [0, 0, 0],
         [0, 0, 0],
-        [0, 0, 0]
+        [0, 0, 0],
     ];
     const rawCounts = [0, 0, 0, 0];
     for (let i = 0; i < cellHSV.length; i++) {
@@ -509,7 +510,7 @@ function parseImage(imageData, w, h, cols, rows) {
         colorIds: result.colorIds,
         confidences: result.confidences,
         secondBests: result.secondBests,
-        centers
+        centers,
     };
 }
 

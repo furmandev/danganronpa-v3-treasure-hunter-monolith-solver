@@ -159,7 +159,7 @@ function solve(initialGrid, rows, cols, maxStates, onProgress) {
         parent: null,
         action: null,
         cleared: startCleared,
-        value: 0
+        value: 0,
     });
 
     let numExplored = 0;
@@ -196,7 +196,7 @@ function solve(initialGrid, rows, cols, maxStates, onProgress) {
                     parent: node,
                     action: [ar, ac],
                     cleared: cl,
-                    value: H + G
+                    value: H + G,
                 };
                 frontier.push(child);
                 numExplored++;
@@ -236,7 +236,7 @@ function buildResult(node, state0) {
         solution: actions,
         states: states,
         explored: 0,
-        clearRate: node.cleared
+        clearRate: node.cleared,
     };
 }
 
