@@ -1,18 +1,21 @@
 /**
- * solver.js — A* solver for THM, ported from THM.py
- * All numpy operations replaced with plain JS arrays.
+ * solver.js — Heuristic search solver for THM.
+ * Prioritizes states that clear the most board while preserving future moves.
  * Board state is a flat Int8Array of height*width.
  */
 
 function solverCreateState(grid2d, rows, cols) {
     const s = new Int8Array(rows * cols);
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) s[r * cols + c] = grid2d[r * cols + c];
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) s[r * cols + c] = grid2d[r * cols + c];
+    }
     return s;
 }
 
 function stateGet(s, r, c, cols) {
     return s[r * cols + c];
 }
+
 function stateSet(s, r, c, cols, v) {
     s[r * cols + c] = v;
 }
@@ -33,10 +36,9 @@ function stateClone(s) {
 }
 
 function stateKey(s) {
-    // Fast hash for explored set
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s[i]) | 0;
-    return h;
+    const chars = new Array(s.length);
+    for (let i = 0; i < s.length; i++) chars[i] = String.fromCharCode(65 + s[i]);
+    return chars.join("");
 }
 
 function adjacent(state, ar, ac, rows, cols) {
@@ -47,91 +49,88 @@ function adjacent(state, ar, ac, rows, cols) {
     const queue = [[ar, ac]];
     visited[ar * cols + ac] = 1;
 
-    while (queue.length > 0) {
-        const [r, c] = queue.shift();
+    let head = 0;
+    while (head < queue.length) {
+        const [r, c] = queue[head++];
         result.push([r, c]);
-        const neighbors = [];
-        if (r > 0) neighbors.push([r - 1, c]);
-        if (r < rows - 1) neighbors.push([r + 1, c]);
-        if (c > 0) neighbors.push([r, c - 1]);
-        if (c < cols - 1) neighbors.push([r, c + 1]);
-        for (const [nr, nc] of neighbors) {
-            const idx = nr * cols + nc;
-            if (!visited[idx] && stateGet(state, nr, nc, cols) === val) {
+
+        if (r > 0) {
+            const idx = (r - 1) * cols + c;
+            if (!visited[idx] && stateGet(state, r - 1, c, cols) === val) {
                 visited[idx] = 1;
-                queue.push([nr, nc]);
+                queue.push([r - 1, c]);
+            }
+        }
+        if (r < rows - 1) {
+            const idx = (r + 1) * cols + c;
+            if (!visited[idx] && stateGet(state, r + 1, c, cols) === val) {
+                visited[idx] = 1;
+                queue.push([r + 1, c]);
+            }
+        }
+        if (c > 0) {
+            const idx = r * cols + (c - 1);
+            if (!visited[idx] && stateGet(state, r, c - 1, cols) === val) {
+                visited[idx] = 1;
+                queue.push([r, c - 1]);
+            }
+        }
+        if (c < cols - 1) {
+            const idx = r * cols + (c + 1);
+            if (!visited[idx] && stateGet(state, r, c + 1, cols) === val) {
+                visited[idx] = 1;
+                queue.push([r, c + 1]);
             }
         }
     }
+
     return result;
 }
 
 function clickable(state, rows, cols) {
     // Returns list of [r,c] actions (one per connected group of size > 1)
-    const visited = new Uint8Array(rows * cols);
-    const actions = [];
-
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const idx = r * cols + c;
-            if (visited[idx] || stateGet(state, r, c, cols) === 0) continue;
-            const group = adjacent(state, r, c, rows, cols);
-            for (const [gr, gc] of group) visited[gr * cols + gc] = 1;
-            if (group.length > 1) actions.push(group[0]);
-        }
-    }
-    return actions;
+    return analyzeState(state, rows, cols, new Map()).actions.map((entry) => entry.action);
 }
 
 function clearable(state, rows, cols) {
     // Count of cells that are part of a group > 1
-    const visited = new Uint8Array(rows * cols);
-    let count = 0;
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const idx = r * cols + c;
-            if (visited[idx] || stateGet(state, r, c, cols) === 0) continue;
-            const group = adjacent(state, r, c, rows, cols);
-            for (const [gr, gc] of group) visited[gr * cols + gc] = 1;
-            if (group.length > 1) count += group.length;
-        }
-    }
-    return count;
+    return analyzeState(state, rows, cols, new Map()).clearableCount;
 }
 
-function click(state, ar, ac, rows, cols) {
+function click(state, ar, ac, rows, cols, groupOverride) {
     // Click on (ar,ac): clear the connected group, increment surrounding cells
     const newState = stateClone(state);
-    const val = stateGet(state, ar, ac, cols);
-    const group = adjacent(state, ar, ac, rows, cols);
+    const group = groupOverride || adjacent(state, ar, ac, rows, cols);
 
-    if (group.length <= 1) return newState; // no-op
+    if (group.length <= 1) return newState;
 
-    // Find surrounding cells (neighbors of group not in group)
     const groupSet = new Set(group.map(([r, c]) => r * cols + c));
     const surroundSet = new Set();
 
     for (const [r, c] of group) {
-        const neighbors = [];
-        if (r > 0) neighbors.push([r - 1, c]);
-        if (r < rows - 1) neighbors.push([r + 1, c]);
-        if (c > 0) neighbors.push([r, c - 1]);
-        if (c < cols - 1) neighbors.push([r, c + 1]);
-        for (const [nr, nc] of neighbors) {
-            const idx = nr * cols + nc;
+        if (r > 0) {
+            const idx = (r - 1) * cols + c;
+            if (!groupSet.has(idx)) surroundSet.add(idx);
+        }
+        if (r < rows - 1) {
+            const idx = (r + 1) * cols + c;
+            if (!groupSet.has(idx)) surroundSet.add(idx);
+        }
+        if (c > 0) {
+            const idx = r * cols + (c - 1);
+            if (!groupSet.has(idx)) surroundSet.add(idx);
+        }
+        if (c < cols - 1) {
+            const idx = r * cols + (c + 1);
             if (!groupSet.has(idx)) surroundSet.add(idx);
         }
     }
 
-    // Increment surrounding (wrap 4 -> 1, skip 0)
     for (const idx of surroundSet) {
         const v = newState[idx];
-        if (v > 0) {
-            newState[idx] = v === 4 ? 1 : v + 1;
-        }
+        if (v > 0) newState[idx] = v === 4 ? 1 : v + 1;
     }
 
-    // Clear group
     for (const [r, c] of group) {
         stateSet(newState, r, c, cols, 0);
     }
@@ -139,109 +138,261 @@ function click(state, ar, ac, rows, cols) {
     return newState;
 }
 
+function analyzeState(state, rows, cols, cache) {
+    const key = stateKey(state);
+    const cached = cache.get(key);
+    if (cached) return cached;
+
+    const visited = new Uint8Array(rows * cols);
+    const actions = [];
+    let nonZeroCount = 0;
+    let clearableCount = 0;
+    let singletonCount = 0;
+    let largestGroup = 0;
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const startIdx = r * cols + c;
+            if (visited[startIdx] || state[startIdx] === 0) continue;
+
+            const cellValue = state[startIdx];
+            const group = [];
+            const queue = [startIdx];
+            visited[startIdx] = 1;
+            let head = 0;
+
+            while (head < queue.length) {
+                const idx = queue[head++];
+                const gr = Math.floor(idx / cols);
+                const gc = idx % cols;
+                group.push([gr, gc]);
+
+                if (gr > 0) {
+                    const nextIdx = idx - cols;
+                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
+                        visited[nextIdx] = 1;
+                        queue.push(nextIdx);
+                    }
+                }
+                if (gr < rows - 1) {
+                    const nextIdx = idx + cols;
+                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
+                        visited[nextIdx] = 1;
+                        queue.push(nextIdx);
+                    }
+                }
+                if (gc > 0) {
+                    const nextIdx = idx - 1;
+                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
+                        visited[nextIdx] = 1;
+                        queue.push(nextIdx);
+                    }
+                }
+                if (gc < cols - 1) {
+                    const nextIdx = idx + 1;
+                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
+                        visited[nextIdx] = 1;
+                        queue.push(nextIdx);
+                    }
+                }
+            }
+
+            const groupSize = group.length;
+            nonZeroCount += groupSize;
+            if (groupSize > largestGroup) largestGroup = groupSize;
+
+            if (groupSize > 1) {
+                clearableCount += groupSize;
+                actions.push({
+                    action: group[0],
+                    group,
+                    groupSize,
+                });
+            } else {
+                singletonCount += 1;
+            }
+        }
+    }
+
+    const clearedCount = state.length - nonZeroCount;
+    const analysis = {
+        key,
+        actions,
+        actionCount: actions.length,
+        clearableCount,
+        clearedCount,
+        clearRate: (clearedCount / state.length) * 100,
+        largestGroup,
+        nonZeroCount,
+        singletonCount,
+    };
+    cache.set(key, analysis);
+    return analysis;
+}
+
+function scoreAnalysis(analysis, depth) {
+    // Match solver-old scoring: H + G where H = clearable + cleared, G = depth.
+    return analysis.clearableCount + analysis.clearedCount + depth;
+}
+
+function compareAnalysisQuality(a, b) {
+    if (a.clearedCount !== b.clearedCount) return a.clearedCount - b.clearedCount;
+    if (a.clearableCount !== b.clearableCount) return a.clearableCount - b.clearableCount;
+    if (a.singletonCount !== b.singletonCount) return b.singletonCount - a.singletonCount;
+    if (a.largestGroup !== b.largestGroup) return a.largestGroup - b.largestGroup;
+    if (a.nonZeroCount !== b.nonZeroCount) return b.nonZeroCount - a.nonZeroCount;
+    return b.actionCount - a.actionCount;
+}
+
+function compareNodes(a, b) {
+    // Keep ordering equivalent to solver-old's "pop max value" behavior.
+    if (a.value !== b.value) return a.value - b.value;
+    return 0;
+}
+
+function isBetterResultNode(candidate, bestNode) {
+    if (!bestNode) return true;
+
+    const qualityDiff = compareAnalysisQuality(candidate.analysis, bestNode.analysis);
+    if (qualityDiff !== 0) return qualityDiff > 0;
+
+    return candidate.depth < bestNode.depth;
+}
+
+function heapPush(heap, item) {
+    heap.push(item);
+    let idx = heap.length - 1;
+
+    while (idx > 0) {
+        const parentIdx = Math.floor((idx - 1) / 2);
+        if (compareNodes(heap[idx], heap[parentIdx]) <= 0) break;
+        [heap[idx], heap[parentIdx]] = [heap[parentIdx], heap[idx]];
+        idx = parentIdx;
+    }
+}
+
+function heapPop(heap) {
+    if (heap.length === 0) return null;
+
+    const top = heap[0];
+    const tail = heap.pop();
+    if (heap.length === 0) return top;
+
+    heap[0] = tail;
+    let idx = 0;
+
+    while (true) {
+        const left = idx * 2 + 1;
+        const right = left + 1;
+        let bestIdx = idx;
+
+        if (left < heap.length && compareNodes(heap[left], heap[bestIdx]) > 0) bestIdx = left;
+        if (right < heap.length && compareNodes(heap[right], heap[bestIdx]) > 0) bestIdx = right;
+        if (bestIdx === idx) break;
+
+        [heap[idx], heap[bestIdx]] = [heap[bestIdx], heap[idx]];
+        idx = bestIdx;
+    }
+
+    return top;
+}
+
 function solve(initialGrid, rows, cols, maxStates, onProgress) {
     /**
-     * A* solver. Returns { solution, states, explored, clearRate }
+     * Heuristic best-first solver. Returns { solution, states, explored, clearRate }
      * solution = array of [r,c] actions
      * states = array of flat Int8Array board states
      */
     const state0 = new Int8Array(initialGrid);
     const totalCells = rows * cols;
-
-    // Priority queue (simple array, pop highest value)
+    const analysisCache = new Map();
     const frontier = [];
     const exploredKeys = new Set();
 
-    const startCleared = stateCleared(state0);
-    frontier.push({
+    const startAnalysis = analyzeState(state0, rows, cols, analysisCache);
+    const startNode = {
         state: state0,
         depth: 0,
         parent: null,
         action: null,
-        cleared: startCleared,
-        value: 0,
-    });
+        analysis: startAnalysis,
+        value: scoreAnalysis(startAnalysis, 0),
+    };
+
+    heapPush(frontier, startNode);
 
     let numExplored = 0;
-    let bestClear = 0,
-        bestNode = null;
+    let bestNode = startNode;
 
     while (frontier.length > 0 && numExplored < maxStates) {
-        // Pop highest value node
-        let bestIdx = 0;
-        for (let i = 1; i < frontier.length; i++) {
-            if (frontier[i].value > frontier[bestIdx].value) bestIdx = i;
+        const node = heapPop(frontier);
+        if (!node) break;
+
+        if (exploredKeys.has(node.analysis.key)) continue;
+
+        exploredKeys.add(node.analysis.key);
+
+        if (isBetterResultNode(node, bestNode)) bestNode = node;
+        if (node.analysis.clearedCount >= totalCells) {
+            return buildResult(node, state0, numExplored);
         }
-        const node = frontier.splice(bestIdx, 1)[0];
 
-        // Check if target reached
-        if (node.cleared >= 100) {
-            return buildResult(node, state0);
+        const childNodes = [];
+        for (const actionInfo of node.analysis.actions) {
+            if (numExplored >= maxStates) break;
+
+            const [ar, ac] = actionInfo.action;
+            const childDepth = node.depth + 1;
+            const newState = click(node.state, ar, ac, rows, cols, actionInfo.group);
+            const childAnalysis = analyzeState(newState, rows, cols, analysisCache);
+
+            if (exploredKeys.has(childAnalysis.key)) continue;
+            numExplored++;
+
+            const child = {
+                state: newState,
+                depth: childDepth,
+                parent: node,
+                action: [ar, ac],
+                analysis: childAnalysis,
+                value: scoreAnalysis(childAnalysis, childDepth),
+            };
+
+            if (isBetterResultNode(child, bestNode)) bestNode = child;
+            childNodes.push(child);
         }
 
-        exploredKeys.add(stateKey(node.state));
+        childNodes.sort((a, b) => compareNodes(b, a));
+        for (const child of childNodes) heapPush(frontier, child);
 
-        const actions = clickable(node.state, rows, cols);
-        for (const [ar, ac] of actions) {
-            const newState = click(node.state, ar, ac, rows, cols);
-            const key = stateKey(newState);
-
-            if (!exploredKeys.has(key)) {
-                const cl = stateCleared(newState);
-                const H = clearable(newState, rows, cols) + (totalCells - countNonZero(newState));
-                const G = node.depth;
-                const child = {
-                    state: newState,
-                    depth: node.depth + 1,
-                    parent: node,
-                    action: [ar, ac],
-                    cleared: cl,
-                    value: H + G,
-                };
-                frontier.push(child);
-                numExplored++;
-
-                if (cl > bestClear || (cl === bestClear && bestNode && child.depth < bestNode.depth)) {
-                    bestClear = cl;
-                    bestNode = child;
-                }
-
-                if (numExplored % 1000 === 0 && onProgress) {
-                    onProgress(numExplored, bestClear);
-                }
-            }
+        if (numExplored % 1000 === 0 && onProgress) {
+            onProgress(numExplored, bestNode.analysis.clearRate);
         }
     }
 
-    // Return best found
-    if (!bestNode) {
-        return { solution: [], states: [state0], explored: numExplored, clearRate: startCleared };
-    }
-    return buildResult(bestNode, state0);
+    if (onProgress) onProgress(numExplored, bestNode.analysis.clearRate);
+    return buildResult(bestNode, state0, numExplored);
 }
 
-function buildResult(node, state0) {
+function buildResult(node, state0, exploredCount) {
     const actions = [];
     const states = [];
     let n = node;
+
     while (n.parent !== null) {
         actions.push(n.action);
         states.push(n.state);
         n = n.parent;
     }
+
     states.push(state0);
     actions.reverse();
     states.reverse();
+
     return {
         solution: actions,
-        states: states,
-        explored: 0,
-        clearRate: node.cleared,
+        states,
+        explored: exploredCount,
+        clearRate: node.analysis.clearRate,
     };
-}
-
-function countNonZero(s) {
-    let c = 0;
-    for (let i = 0; i < s.length; i++) if (s[i] !== 0) c++;
-    return c;
 }
