@@ -18,8 +18,9 @@ let solveWorker = null;
 let selectedImageFile = null;
 let selectedImageUrl = null;
 let stepAnimationFrame = null;
-let suppressAutoPerspectiveOpen = false;
 let isApplyingPerspective = false;
+let hasAutoOpenedCropperForCurrentImage = false;
+const AUTO_CROP_UNCERTAIN_THRESHOLD = 5;
 let perspectiveState = {
     image: null,
     points: [],
@@ -47,6 +48,22 @@ function setParseEnabled(isEnabled) {
     document.getElementById("btn-parse").disabled = !isEnabled;
 }
 
+function getMinConfidenceThreshold() {
+    return parseInt(document.getElementById("min-conf").value) / 100;
+}
+
+function countUncertainCells(result, minConf) {
+    return result.confidences.filter((confidence) => confidence < minConf).length;
+}
+
+function maybeAutoOpenCropper(shouldAutoOpen) {
+    if (!shouldAutoOpen || hasAutoOpenedCropperForCurrentImage) return;
+    hasAutoOpenedCropperForCurrentImage = true;
+    setTimeout(() => {
+        openPerspectiveModal();
+    }, 0);
+}
+
 function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     const kb = bytes / 1024;
@@ -61,6 +78,7 @@ function triggerFileSelect() {
 function clearSelectedImage() {
     closePerspectiveModal();
     selectedImageFile = null;
+    hasAutoOpenedCropperForCurrentImage = false;
     if (selectedImageUrl) {
         URL.revokeObjectURL(selectedImageUrl);
         selectedImageUrl = null;
@@ -74,7 +92,7 @@ function clearSelectedImage() {
     setUploadStatus("No image selected.");
 }
 
-function useSelectedImage(file, objectUrl, width, height) {
+function useSelectedImage(file, objectUrl, width, height, onReady) {
     if (selectedImageUrl) URL.revokeObjectURL(selectedImageUrl);
     selectedImageUrl = objectUrl;
     selectedImageFile = file;
@@ -88,13 +106,7 @@ function useSelectedImage(file, objectUrl, width, height) {
     document.getElementById("upload-preview-wrap").style.display = "flex";
     setParseEnabled(true);
     setUploadStatus("Image ready to parse.", "ok");
-
-    if (!suppressAutoPerspectiveOpen) {
-        setTimeout(() => {
-            openPerspectiveModal();
-        }, 0);
-    }
-    suppressAutoPerspectiveOpen = false;
+    if (typeof onReady === "function") onReady();
 }
 
 function loadImageElement(img, src) {
@@ -510,10 +522,15 @@ function applyPerspective() {
                     );
 
                     setPerspectiveBusy(false, "");
-                    suppressAutoPerspectiveOpen = true;
                     closePerspectiveModal();
-                    handleSelectedFile(correctedFile);
-                    setUploadStatus("Perspective-corrected image ready to parse.", "ok");
+                    handleSelectedFile(
+                        correctedFile,
+                        () => {
+                            setUploadStatus("Perspective correction applied. Re-parsing...", "ok");
+                            startParse();
+                        },
+                        { preserveAutoOpenState: true },
+                    );
                 },
                 mimeType,
                 0.95,
@@ -532,8 +549,11 @@ function fileNameWithSuffix(fileName, suffix, fallbackExt) {
     return `${fileName.slice(0, dotIdx)}${suffix}${fileName.slice(dotIdx)}`;
 }
 
-function handleSelectedFile(file) {
+function handleSelectedFile(file, onReady, options) {
     if (!file) return;
+
+    const { preserveAutoOpenState = false } = options || {};
+    if (!preserveAutoOpenState) hasAutoOpenedCropperForCurrentImage = false;
 
     if (!file.type || !file.type.startsWith("image/")) {
         setUploadStatus("Please select a valid image file.", "error");
@@ -551,7 +571,7 @@ function handleSelectedFile(file) {
             setParseEnabled(false);
             return;
         }
-        useSelectedImage(file, objectUrl, img.width, img.height);
+        useSelectedImage(file, objectUrl, img.width, img.height, onReady);
     };
     img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
@@ -730,8 +750,9 @@ function startParse() {
                     solveStarted = false;
 
                     const totalCells = ROWS * COLS;
-                    const minConf = parseInt(document.getElementById("min-conf").value) / 100;
-                    const lowCount = parseResult.confidences.filter((c) => c < minConf).length;
+                    const minConf = getMinConfidenceThreshold();
+                    const lowCount = countUncertainCells(parseResult, minConf);
+                    const shouldAutoOpenCropper = lowCount > AUTO_CROP_UNCERTAIN_THRESHOLD;
                     if (lowCount > totalCells * 0.2) {
                         const pct = Math.round((lowCount / totalCells) * 100);
                         setStatus(
@@ -739,6 +760,7 @@ function startParse() {
                                 `Try using a higher-resolution photo, or use the perspective tool to straighten and crop the board more tightly.`,
                             "error",
                         );
+                        maybeAutoOpenCropper(shouldAutoOpenCropper);
                         return;
                     }
 
@@ -746,6 +768,7 @@ function startParse() {
                     showPanel("cal-panel");
                     updateBoardText();
                     nextCalibration();
+                    maybeAutoOpenCropper(shouldAutoOpenCropper);
                 } catch (err) {
                     setStatus("Parse error: " + err.message, "error");
                     console.error(err);
@@ -764,6 +787,66 @@ const COLOR_CSS = {
     3: "#e8a832", // orange
     4: "#5ba8e8", // blue
 };
+const COLOR_NAMES = {
+    1: "Gray",
+    2: "Pink",
+    3: "Orange",
+    4: "Blue",
+};
+const COLOR_BADGE_CLASSES = {
+    1: "gray",
+    2: "pink",
+    3: "orange",
+    4: "blue",
+};
+const COLOR_BUTTON_IDS = {
+    1: "cal-btn-gray",
+    2: "cal-btn-pink",
+    3: "cal-btn-orange",
+    4: "cal-btn-blue",
+};
+
+function getColorName(colorId) {
+    return COLOR_NAMES[colorId] || "Unknown";
+}
+
+function updateCalibrationButtons(currentGuessId) {
+    for (const [colorId, buttonId] of Object.entries(COLOR_BUTTON_IDS)) {
+        const button = document.getElementById(buttonId);
+        if (!button) continue;
+        const isCurrentGuess = Number(colorId) === currentGuessId;
+        button.classList.toggle("current-guess", isCurrentGuess);
+        button.setAttribute("aria-pressed", isCurrentGuess ? "true" : "false");
+    }
+
+    const skipButton = document.getElementById("cal-btn-skip");
+    if (skipButton) {
+        skipButton.textContent = currentGuessId ? `Accept ${getColorName(currentGuessId)}` : "Accept Guess";
+    }
+}
+
+function renderCalibrationInfo(idx) {
+    const info = document.getElementById("cal-info");
+    if (idx === null || idx === undefined) {
+        updateCalibrationButtons(null);
+        return;
+    }
+
+    const r = Math.floor(idx / COLS);
+    const c = idx % COLS;
+    const confidence = (parseResult.confidences[idx] * 100).toFixed(0);
+    const guessId = parseResult.colorIds[idx];
+    const altId = parseResult.secondBests[idx];
+    const guessName = getColorName(guessId);
+    const altName = getColorName(altId);
+    const badgeClass = COLOR_BADGE_CLASSES[guessId] || "";
+
+    info.innerHTML =
+        `<div class="cal-summary"><span><b>${calQueue.length}</b> cells to review</span><span>Row <b>${r + 1}</b>, Col <b>${c + 1}</b></span><span>Confidence <b>${confidence}%</b></span></div>` +
+        `<div class="cal-current-guess"><span>Current parser guess:</span><span class="guess-chip ${badgeClass}">${guessName}</span><span>My second guess is <b>${altName}</b></span></div>`;
+
+    updateCalibrationButtons(guessId);
+}
 
 function updateBoardText() {
     const label = document.getElementById("board-label");
@@ -806,6 +889,7 @@ function nextCalibration() {
     if (calQueue.length === 0) {
         document.getElementById("cal-info").textContent = "✅ All cells above confidence threshold! Starting solver...";
         document.getElementById("btn-solve").style.display = "none";
+        updateCalibrationButtons(null);
         drawCalCanvas(null);
 
         if (!solveStarted) {
@@ -817,17 +901,7 @@ function nextCalibration() {
     }
 
     const idx = calQueue[0];
-    const r = Math.floor(idx / COLS),
-        c = idx % COLS;
-    const conf = (parseResult.confidences[idx] * 100).toFixed(0);
-    const assigned = CCHARS[parseResult.colorIds[idx]];
-    const alt = CCHARS[parseResult.secondBests[idx]];
-
-    document.getElementById("cal-info").innerHTML =
-        `<b>${calQueue.length}</b> cells to review &mdash; ` +
-        `Row ${r + 1}, Col ${c + 1}: ` +
-        `Guess: <b>${assigned}</b>, Alt: <b>${alt}</b>, ` +
-        `Confidence: <b>${conf}%</b>`;
+    renderCalibrationInfo(idx);
     document.getElementById("btn-solve").style.display = "none";
 
     drawCalCanvas(idx);
@@ -942,13 +1016,7 @@ function undoCalibration() {
     updateUndoButton();
     if (calQueue.length > 0) {
         drawCalCanvas(calQueue[0]);
-        const idx = calQueue[0];
-        const r = Math.floor(idx / COLS);
-        const c = idx % COLS;
-        const conf = (parseResult.confidences[idx] * 100).toFixed(0);
-        document.getElementById("cal-info").innerHTML =
-            `Cell (${r + 1}, ${c + 1}) — guessed <b>${COLORS[parseResult.colorIds[idx]]}</b>. ` +
-            `Confidence: <b>${conf}%</b>`;
+        renderCalibrationInfo(calQueue[0]);
     }
 }
 

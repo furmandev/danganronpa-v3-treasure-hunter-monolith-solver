@@ -36,8 +36,15 @@ function stateClone(s) {
 }
 
 function stateKey(s) {
-    const chars = new Array(s.length);
-    for (let i = 0; i < s.length; i++) chars[i] = String.fromCharCode(65 + s[i]);
+    // Pack 3 base-5 cells per character to reduce key size and Map overhead.
+    const chars = new Array(Math.ceil(s.length / 3));
+    let out = 0;
+    for (let i = 0; i < s.length; i += 3) {
+        const a = s[i] || 0;
+        const b = s[i + 1] || 0;
+        const c = s[i + 2] || 0;
+        chars[out++] = String.fromCharCode(35 + a + b * 5 + c * 25);
+    }
     return chars.join("");
 }
 
@@ -89,20 +96,133 @@ function adjacent(state, ar, ac, rows, cols) {
 
 function clickable(state, rows, cols) {
     // Returns list of [r,c] actions (one per connected group of size > 1)
-    return analyzeState(state, rows, cols, new Map()).actions.map((entry) => entry.action);
+    return analyzeState(state, rows, cols, new Map(), null).actions.map((entry) => entry.action);
 }
 
 function clearable(state, rows, cols) {
     // Count of cells that are part of a group > 1
-    return analyzeState(state, rows, cols, new Map()).clearableCount;
+    return analyzeState(state, rows, cols, new Map(), null).clearableCount;
 }
 
-function click(state, ar, ac, rows, cols, groupOverride) {
+function click(state, ar, ac, rows, cols, groupOverride, scratch) {
     // Click on (ar,ac): clear the connected group, increment surrounding cells
     const newState = stateClone(state);
     const group = groupOverride || adjacent(state, ar, ac, rows, cols);
 
     if (group.length <= 1) return newState;
+
+    const useFlatGroup = typeof group[0] === "number";
+
+    if (scratch) {
+        let mark = scratch.mark + 1;
+        if (mark === 0xffffffff) {
+            scratch.groupMark.fill(0);
+            scratch.surroundMark.fill(0);
+            mark = 1;
+        }
+        scratch.mark = mark;
+
+        let surroundCount = 0;
+        if (useFlatGroup) {
+            for (let i = 0; i < group.length; i++) scratch.groupMark[group[i]] = mark;
+
+            for (let i = 0; i < group.length; i++) {
+                const idx = group[i];
+                const r = Math.floor(idx / cols);
+                const c = idx % cols;
+
+                if (r > 0) {
+                    const n = idx - cols;
+                    if (scratch.groupMark[n] !== mark && scratch.surroundMark[n] !== mark) {
+                        scratch.surroundMark[n] = mark;
+                        scratch.surroundList[surroundCount++] = n;
+                    }
+                }
+                if (r < rows - 1) {
+                    const n = idx + cols;
+                    if (scratch.groupMark[n] !== mark && scratch.surroundMark[n] !== mark) {
+                        scratch.surroundMark[n] = mark;
+                        scratch.surroundList[surroundCount++] = n;
+                    }
+                }
+                if (c > 0) {
+                    const n = idx - 1;
+                    if (scratch.groupMark[n] !== mark && scratch.surroundMark[n] !== mark) {
+                        scratch.surroundMark[n] = mark;
+                        scratch.surroundList[surroundCount++] = n;
+                    }
+                }
+                if (c < cols - 1) {
+                    const n = idx + 1;
+                    if (scratch.groupMark[n] !== mark && scratch.surroundMark[n] !== mark) {
+                        scratch.surroundMark[n] = mark;
+                        scratch.surroundList[surroundCount++] = n;
+                    }
+                }
+            }
+
+            for (let i = 0; i < surroundCount; i++) {
+                const idx = scratch.surroundList[i];
+                const v = newState[idx];
+                if (v > 0) newState[idx] = v === 4 ? 1 : v + 1;
+            }
+
+            for (let i = 0; i < group.length; i++) newState[group[i]] = 0;
+            return newState;
+        }
+    }
+
+    if (useFlatGroup) {
+        const groupMask = new Uint8Array(rows * cols);
+        const surroundMask = new Uint8Array(rows * cols);
+        const surroundList = [];
+
+        for (let i = 0; i < group.length; i++) groupMask[group[i]] = 1;
+
+        for (let i = 0; i < group.length; i++) {
+            const idx = group[i];
+            const r = Math.floor(idx / cols);
+            const c = idx % cols;
+
+            if (r > 0) {
+                const n = idx - cols;
+                if (!groupMask[n] && !surroundMask[n]) {
+                    surroundMask[n] = 1;
+                    surroundList.push(n);
+                }
+            }
+            if (r < rows - 1) {
+                const n = idx + cols;
+                if (!groupMask[n] && !surroundMask[n]) {
+                    surroundMask[n] = 1;
+                    surroundList.push(n);
+                }
+            }
+            if (c > 0) {
+                const n = idx - 1;
+                if (!groupMask[n] && !surroundMask[n]) {
+                    surroundMask[n] = 1;
+                    surroundList.push(n);
+                }
+            }
+            if (c < cols - 1) {
+                const n = idx + 1;
+                if (!groupMask[n] && !surroundMask[n]) {
+                    surroundMask[n] = 1;
+                    surroundList.push(n);
+                }
+            }
+        }
+
+        for (let i = 0; i < surroundList.length; i++) {
+            const idx = surroundList[i];
+            const v = newState[idx];
+            if (v > 0) newState[idx] = v === 4 ? 1 : v + 1;
+        }
+
+        for (let i = 0; i < group.length; i++) newState[group[i]] = 0;
+        return newState;
+    }
 
     const groupSet = new Set(group.map(([r, c]) => r * cols + c));
     const surroundSet = new Set();
@@ -131,86 +251,102 @@ function click(state, ar, ac, rows, cols, groupOverride) {
         if (v > 0) newState[idx] = v === 4 ? 1 : v + 1;
     }
 
-    for (const [r, c] of group) {
-        stateSet(newState, r, c, cols, 0);
-    }
-
+    for (const [r, c] of group) stateSet(newState, r, c, cols, 0);
     return newState;
 }
 
-function analyzeState(state, rows, cols, cache) {
+function analyzeState(state, rows, cols, cache, temp) {
     const key = stateKey(state);
     const cached = cache.get(key);
     if (cached) return cached;
 
-    const visited = new Uint8Array(rows * cols);
+    const totalCells = rows * cols;
+    let visited;
+    let visitMark;
+    let queue;
+
+    if (temp) {
+        visitMark = ++temp.visitMark;
+        if (visitMark === 0xffffffff) {
+            temp.visited.fill(0);
+            visitMark = 1;
+        }
+        temp.visitMark = visitMark;
+        visited = temp.visited;
+        queue = temp.queue;
+    } else {
+        visited = new Uint32Array(totalCells);
+        visitMark = 1;
+        queue = new Int32Array(totalCells);
+    }
+
     const actions = [];
     let nonZeroCount = 0;
     let clearableCount = 0;
     let singletonCount = 0;
     let largestGroup = 0;
 
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const startIdx = r * cols + c;
-            if (visited[startIdx] || state[startIdx] === 0) continue;
+    for (let startIdx = 0; startIdx < totalCells; startIdx++) {
+        if (visited[startIdx] === visitMark || state[startIdx] === 0) continue;
 
-            const cellValue = state[startIdx];
-            const group = [];
-            const queue = [startIdx];
-            visited[startIdx] = 1;
-            let head = 0;
+        const cellValue = state[startIdx];
+        const groupIndices = [];
+        let head = 0;
+        let tail = 0;
+        queue[tail++] = startIdx;
+        visited[startIdx] = visitMark;
 
-            while (head < queue.length) {
-                const idx = queue[head++];
-                const gr = Math.floor(idx / cols);
-                const gc = idx % cols;
-                group.push([gr, gc]);
+        while (head < tail) {
+            const idx = queue[head++];
+            const gr = Math.floor(idx / cols);
+            const gc = idx % cols;
+            groupIndices.push(idx);
 
-                if (gr > 0) {
-                    const nextIdx = idx - cols;
-                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
-                        visited[nextIdx] = 1;
-                        queue.push(nextIdx);
-                    }
-                }
-                if (gr < rows - 1) {
-                    const nextIdx = idx + cols;
-                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
-                        visited[nextIdx] = 1;
-                        queue.push(nextIdx);
-                    }
-                }
-                if (gc > 0) {
-                    const nextIdx = idx - 1;
-                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
-                        visited[nextIdx] = 1;
-                        queue.push(nextIdx);
-                    }
-                }
-                if (gc < cols - 1) {
-                    const nextIdx = idx + 1;
-                    if (!visited[nextIdx] && state[nextIdx] === cellValue) {
-                        visited[nextIdx] = 1;
-                        queue.push(nextIdx);
-                    }
+            if (gr > 0) {
+                const nextIdx = idx - cols;
+                if (visited[nextIdx] !== visitMark && state[nextIdx] === cellValue) {
+                    visited[nextIdx] = visitMark;
+                    queue[tail++] = nextIdx;
                 }
             }
-
-            const groupSize = group.length;
-            nonZeroCount += groupSize;
-            if (groupSize > largestGroup) largestGroup = groupSize;
-
-            if (groupSize > 1) {
-                clearableCount += groupSize;
-                actions.push({
-                    action: group[0],
-                    group,
-                    groupSize,
-                });
-            } else {
-                singletonCount += 1;
+            if (gr < rows - 1) {
+                const nextIdx = idx + cols;
+                if (visited[nextIdx] !== visitMark && state[nextIdx] === cellValue) {
+                    visited[nextIdx] = visitMark;
+                    queue[tail++] = nextIdx;
+                }
             }
+            if (gc > 0) {
+                const nextIdx = idx - 1;
+                if (visited[nextIdx] !== visitMark && state[nextIdx] === cellValue) {
+                    visited[nextIdx] = visitMark;
+                    queue[tail++] = nextIdx;
+                }
+            }
+            if (gc < cols - 1) {
+                const nextIdx = idx + 1;
+                if (visited[nextIdx] !== visitMark && state[nextIdx] === cellValue) {
+                    visited[nextIdx] = visitMark;
+                    queue[tail++] = nextIdx;
+                }
+            }
+        }
+
+        const groupSize = groupIndices.length;
+        nonZeroCount += groupSize;
+        if (groupSize > largestGroup) largestGroup = groupSize;
+
+        if (groupSize > 1) {
+            clearableCount += groupSize;
+            const actionIndex = groupIndices[0];
+            actions.push({
+                action: [Math.floor(actionIndex / cols), actionIndex % cols],
+                actionIndex,
+                groupIndices,
+                groupSize,
+            });
+        } else {
+            singletonCount += 1;
         }
     }
 
@@ -228,6 +364,18 @@ function analyzeState(state, rows, cols, cache) {
     };
     cache.set(key, analysis);
     return analysis;
+}
+
+function createSolveScratch(totalCells) {
+    return {
+        visited: new Uint32Array(totalCells),
+        queue: new Int32Array(totalCells),
+        visitMark: 0,
+        groupMark: new Uint32Array(totalCells),
+        surroundMark: new Uint32Array(totalCells),
+        surroundList: new Int32Array(totalCells),
+        mark: 0,
+    };
 }
 
 function scoreAnalysis(analysis, depth) {
@@ -308,8 +456,9 @@ function solve(initialGrid, rows, cols, maxStates, onProgress) {
     const analysisCache = new Map();
     const frontier = [];
     const exploredKeys = new Set();
+    const scratch = createSolveScratch(totalCells);
 
-    const startAnalysis = analyzeState(state0, rows, cols, analysisCache);
+    const startAnalysis = analyzeState(state0, rows, cols, analysisCache, scratch);
     const startNode = {
         state: state0,
         depth: 0,
@@ -329,7 +478,6 @@ function solve(initialGrid, rows, cols, maxStates, onProgress) {
         if (!node) break;
 
         if (exploredKeys.has(node.analysis.key)) continue;
-
         exploredKeys.add(node.analysis.key);
 
         if (isBetterResultNode(node, bestNode)) bestNode = node;
@@ -337,14 +485,13 @@ function solve(initialGrid, rows, cols, maxStates, onProgress) {
             return buildResult(node, state0, numExplored);
         }
 
-        const childNodes = [];
         for (const actionInfo of node.analysis.actions) {
             if (numExplored >= maxStates) break;
 
             const [ar, ac] = actionInfo.action;
             const childDepth = node.depth + 1;
-            const newState = click(node.state, ar, ac, rows, cols, actionInfo.group);
-            const childAnalysis = analyzeState(newState, rows, cols, analysisCache);
+            const newState = click(node.state, ar, ac, rows, cols, actionInfo.groupIndices, scratch);
+            const childAnalysis = analyzeState(newState, rows, cols, analysisCache, scratch);
 
             if (exploredKeys.has(childAnalysis.key)) continue;
             numExplored++;
@@ -359,11 +506,8 @@ function solve(initialGrid, rows, cols, maxStates, onProgress) {
             };
 
             if (isBetterResultNode(child, bestNode)) bestNode = child;
-            childNodes.push(child);
+            heapPush(frontier, child);
         }
-
-        childNodes.sort((a, b) => compareNodes(b, a));
-        for (const child of childNodes) heapPush(frontier, child);
 
         if (numExplored % 1000 === 0 && onProgress) {
             onProgress(numExplored, bestNode.analysis.clearRate);

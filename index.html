@@ -306,9 +306,87 @@
                 margin: 8px 0;
                 flex-wrap: wrap;
             }
+            #cal-info {
+                margin-bottom: 10px;
+                padding: 12px 14px;
+                border: 1px solid #3b414d;
+                border-radius: 10px;
+                background: linear-gradient(180deg, rgba(43, 49, 61, 0.95), rgba(27, 31, 39, 0.98));
+            }
+            .cal-summary {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px 14px;
+                align-items: center;
+                margin-bottom: 8px;
+                font-size: 14px;
+                color: #cfd7e6;
+            }
+            .cal-current-guess {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+                font-size: 16px;
+            }
+            .cal-current-guess strong {
+                color: #fff;
+                letter-spacing: 0.02em;
+            }
+            .guess-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                font-weight: 700;
+                color: #fff;
+            }
+            .guess-chip::before {
+                content: "";
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                background: currentColor;
+                box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
+            }
+            .guess-chip.gray {
+                color: #d6d6d6;
+            }
+            .guess-chip.pink {
+                color: #ff7eb3;
+            }
+            .guess-chip.orange {
+                color: #ffb347;
+            }
+            .guess-chip.blue {
+                color: #76baff;
+            }
             .cal-btns button {
                 min-width: 90px;
                 font-size: 15px;
+            }
+            .cal-btns button.current-guess {
+                position: relative;
+                box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.95), 0 0 0 6px rgba(255, 214, 10, 0.45);
+                transform: translateY(-1px);
+            }
+            .cal-btns button.current-guess::after {
+                content: "Current guess";
+                position: absolute;
+                left: 50%;
+                bottom: calc(100% + 6px);
+                transform: translateX(-50%);
+                padding: 3px 8px;
+                border-radius: 999px;
+                background: #ffd84d;
+                color: #222;
+                font-size: 11px;
+                font-weight: 700;
+                white-space: nowrap;
+                pointer-events: none;
             }
             .btn-gray {
                 background: #888;
@@ -339,6 +417,18 @@
             }
             .btn-skip:hover {
                 background: #666;
+            }
+            @media (max-width: 640px) {
+                .cal-current-guess {
+                    font-size: 15px;
+                }
+                .cal-btns button.current-guess::after {
+                    position: static;
+                    transform: none;
+                    display: inline-block;
+                    margin-left: 8px;
+                    vertical-align: middle;
+                }
             }
 
             /* Solution */
@@ -479,14 +569,14 @@
                 <div class="setting-group">
                     <label
                         >Maximum Calculations:
-                        <input type="number" id="max-states" value="50000" min="1000" step="1000"
+                        <input type="number" id="max-states" value="100000" min="1000" step="1000"
                     /></label>
                     <p class="hint">Higher values allow more simulations, but can take longer to process.</p>
                 </div>
                 <div class="setting-group">
                     <label
                         >Minimum Color Confidence:
-                        <input type="number" id="min-conf" value="80" min="50" max="99" step="5" />%</label
+                        <input type="number" id="min-conf" value="75" min="50" max="99" step="5" />%</label
                     >
                     <p class="hint">
                         When viewing your screenshot, if the confidence is below this value, the solver will ask for
@@ -503,11 +593,11 @@
             <div id="cal-info"></div>
             <div id="cal-img-wrap"><canvas id="cal-canvas"></canvas></div>
             <div class="cal-btns">
-                <button class="btn-gray" onclick="calibrate(1)">Gray</button>
-                <button class="btn-pink" onclick="calibrate(2)">Pink</button>
-                <button class="btn-orange" onclick="calibrate(3)">Orange</button>
-                <button class="btn-blue" onclick="calibrate(4)">Blue</button>
-                <button class="btn-skip" onclick="calibrate(0)">Accept / Skip</button>
+                <button id="cal-btn-gray" class="btn-gray" onclick="calibrate(1)">Gray</button>
+                <button id="cal-btn-pink" class="btn-pink" onclick="calibrate(2)">Pink</button>
+                <button id="cal-btn-orange" class="btn-orange" onclick="calibrate(3)">Orange</button>
+                <button id="cal-btn-blue" class="btn-blue" onclick="calibrate(4)">Blue</button>
+                <button id="cal-btn-skip" class="btn-skip" onclick="calibrate(0)">Accept Guess</button>
                 <button id="btn-undo-cal" onclick="undoCalibration()" style="display: none">&#8630; Undo</button>
             </div>
             <div id="board-label">Your grid</div>
