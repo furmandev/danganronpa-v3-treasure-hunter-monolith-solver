@@ -1108,6 +1108,89 @@ const FALLBACK_COLORS = {
     4: "#5ba8e8",
 };
 
+function getSolutionActionGroup(state, action) {
+    if (!state || !action) return [];
+
+    const [ar, ac] = action;
+    const idx = ar * COLS + ac;
+    if (idx < 0 || idx >= state.length || state[idx] === 0) return [];
+
+    return adjacent(state, ar, ac, ROWS, COLS);
+}
+
+function drawSolutionActionGroup(ctx, group, timestamp) {
+    if (!group.length) return;
+
+    const pulse = (Math.sin(timestamp / 420) + 1) / 2;
+    const groupSet = new Set(group.map(([r, c]) => `${r},${c}`));
+
+    ctx.save();
+    ctx.fillStyle = `rgba(255, 255, 180, ${0.1 + pulse * 0.1})`;
+    for (const [r, c] of group) {
+        ctx.fillRect(c * CELL_PX + 1, r * CELL_PX + 1, CELL_PX - 2, CELL_PX - 2);
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.shadowColor = `rgba(255, 70, 70, ${0.55 + pulse * 0.35})`;
+    ctx.shadowBlur = 10 + pulse * 16;
+    ctx.strokeStyle = `rgba(255, 60, 60, ${0.75 + pulse * 0.25})`;
+    ctx.lineWidth = 4 + pulse * 3;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const [r, c] of group) {
+        const x = c * CELL_PX;
+        const y = r * CELL_PX;
+        if (!groupSet.has(`${r - 1},${c}`)) {
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + CELL_PX, y);
+        }
+        if (!groupSet.has(`${r + 1},${c}`)) {
+            ctx.moveTo(x, y + CELL_PX);
+            ctx.lineTo(x + CELL_PX, y + CELL_PX);
+        }
+        if (!groupSet.has(`${r},${c - 1}`)) {
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + CELL_PX);
+        }
+        if (!groupSet.has(`${r},${c + 1}`)) {
+            ctx.moveTo(x + CELL_PX, y);
+            ctx.lineTo(x + CELL_PX, y + CELL_PX);
+        }
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 245, 140, ${0.8 + (1 - pulse) * 0.2})`;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const [r, c] of group) {
+        const x = c * CELL_PX + 1.5;
+        const y = r * CELL_PX + 1.5;
+        const size = CELL_PX - 3;
+        if (!groupSet.has(`${r - 1},${c}`)) {
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + size, y);
+        }
+        if (!groupSet.has(`${r + 1},${c}`)) {
+            ctx.moveTo(x, y + size);
+            ctx.lineTo(x + size, y + size);
+        }
+        if (!groupSet.has(`${r},${c - 1}`)) {
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + size);
+        }
+        if (!groupSet.has(`${r},${c + 1}`)) {
+            ctx.moveTo(x + size, y);
+            ctx.lineTo(x + size, y + size);
+        }
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
 function cancelStepAnimation() {
     if (stepAnimationFrame !== null) {
         cancelAnimationFrame(stepAnimationFrame);
@@ -1143,36 +1226,13 @@ function drawSolutionStep(timestamp = 0) {
 
     // Highlight action
     if (currentStep < solveResult.solution.length) {
-        const [ar, ac] = solveResult.solution[currentStep];
-        const pulse = (Math.sin(timestamp / 420) + 1) / 2;
-        const tileX = ac * CELL_PX;
-        const tileY = ar * CELL_PX;
-        const centerX = tileX + CELL_PX / 2;
-        const centerY = tileY + CELL_PX / 2;
-        const scale = 1 + pulse * 0.14;
-        const outerSize = CELL_PX * scale;
-        const outerX = centerX - outerSize / 2;
-        const outerY = centerY - outerSize / 2;
-        const innerInset = 4 - pulse * 1.5;
-        const innerSize = CELL_PX - innerInset * 2;
+        const action = solveResult.solution[currentStep];
+        const [ar, ac] = action;
+        const group = getSolutionActionGroup(state, action);
 
-        ctx.save();
-        ctx.shadowColor = `rgba(255, 70, 70, ${0.55 + pulse * 0.35})`;
-        ctx.shadowBlur = 10 + pulse * 16;
-        ctx.strokeStyle = `rgba(255, 60, 60, ${0.75 + pulse * 0.25})`;
-        ctx.lineWidth = 4 + pulse * 3;
-        ctx.strokeRect(outerX, outerY, outerSize, outerSize);
-        ctx.restore();
-
-        ctx.save();
-        ctx.strokeStyle = `rgba(255, 245, 140, ${0.8 + (1 - pulse) * 0.2})`;
-        ctx.lineWidth = 2.5;
-        ctx.strokeRect(tileX + innerInset, tileY + innerInset, innerSize, innerSize);
-        ctx.fillStyle = `rgba(255, 255, 180, ${0.06 + pulse * 0.08})`;
-        ctx.fillRect(tileX + 1, tileY + 1, CELL_PX - 2, CELL_PX - 2);
-        ctx.restore();
-
-        document.getElementById("sol-info").textContent = `Click the highlighted block at Row ${ar + 1}, Col ${ac + 1}`;
+        drawSolutionActionGroup(ctx, group, timestamp);
+        document.getElementById("sol-info").textContent =
+            `Click any highlighted block in this group (for example Row ${ar + 1}, Col ${ac + 1})`;
         stepAnimationFrame = requestAnimationFrame(drawSolutionStep);
     } else {
         document.getElementById("sol-info").textContent = "Final board state";
