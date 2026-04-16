@@ -1,0 +1,261 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>THM Solver</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, sans-serif;
+        background: #1a1a2e;
+        color: #eee;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-height: 100vh;
+        padding: 20px;
+      }
+      h1 {
+        margin-bottom: 16px;
+        color: #e94560;
+      }
+      .panel {
+        background: #16213e;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 10px;
+        max-width: 960px;
+        width: 100%;
+      }
+      .panel h2 {
+        color: #e94560;
+        margin-bottom: 12px;
+        font-size: 1.1em;
+      }
+      button {
+        background: #e94560;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        margin: 4px;
+      }
+      button:hover {
+        background: #c73650;
+      }
+      button:disabled {
+        background: #555;
+        cursor: not-allowed;
+      }
+      .step-nav {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 12px 0;
+      }
+      .step-nav span {
+        font-size: 18px;
+        min-width: 140px;
+        text-align: center;
+      }
+      #status {
+        margin: 10px 0;
+        padding: 10px;
+        border-radius: 6px;
+        font-size: 14px;
+      }
+      .info {
+        background: #0f3460;
+      }
+      .error {
+        background: #6b1a1a;
+      }
+      .success {
+        background: #1a6b2a;
+      }
+      input[type="file"] {
+        margin: 8px 0;
+      }
+      .settings {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin: 8px 0;
+      }
+      .settings label {
+        font-size: 13px;
+      }
+      .settings input[type="number"] {
+        width: 80px;
+        padding: 4px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background: #1a1a2e;
+        color: #eee;
+      }
+      #board-text {
+        font-family: monospace;
+        font-size: 11px;
+        background: #0d1117;
+        padding: 10px;
+        border-radius: 6px;
+        overflow-x: auto;
+        white-space: pre;
+        margin: 8px 0;
+        max-height: 180px;
+        overflow-y: auto;
+        display: none;
+      }
+      .color-key {
+        display: flex;
+        gap: 16px;
+        font-size: 12px;
+        margin: 8px 0;
+      }
+      .color-key span {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .color-key .sw {
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        border: 1px solid #555;
+        display: inline-block;
+      }
+
+      /* Calibration */
+      #cal-panel {
+        display: none;
+      }
+      #cal-img-wrap {
+        position: relative;
+        display: inline-block;
+        margin: 10px 0;
+      }
+      #cal-img-wrap canvas {
+        border-radius: 8px;
+        border: 2px solid #444;
+      }
+      .cal-btns {
+        display: flex;
+        gap: 8px;
+        margin: 8px 0;
+        flex-wrap: wrap;
+      }
+      .cal-btns button {
+        min-width: 90px;
+        font-size: 15px;
+      }
+      .btn-gray {
+        background: #888;
+      }
+      .btn-gray:hover {
+        background: #999;
+      }
+      .btn-pink {
+        background: #d35;
+      }
+      .btn-pink:hover {
+        background: #e46;
+      }
+      .btn-orange {
+        background: #d80;
+      }
+      .btn-orange:hover {
+        background: #ea1;
+      }
+      .btn-blue {
+        background: #28d;
+      }
+      .btn-blue:hover {
+        background: #39e;
+      }
+      .btn-skip {
+        background: #555;
+      }
+      .btn-skip:hover {
+        background: #666;
+      }
+
+      /* Solution */
+      #sol-panel {
+        display: none;
+      }
+      #sol-canvas {
+        border-radius: 8px;
+        border: 2px solid #333;
+        image-rendering: pixelated;
+        max-width: 100%;
+      }
+      #sol-info {
+        margin-top: 8px;
+        font-size: 13px;
+        color: #888;
+      }
+      #progress {
+        margin: 8px 0;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>&#x1F528; THM Solver</h1>
+
+    <div class="panel">
+      <h2>1. Load Image</h2>
+      <input type="file" id="file-input" accept="image/*" />
+      <div class="settings">
+        <label>Max states: <input type="number" id="max-states" value="10000" min="1000" step="1000" /></label>
+        <label>Confidence: <input type="number" id="min-conf" value="80" min="50" max="99" step="5" />%</label>
+      </div>
+      <button id="btn-parse" onclick="startParse()">Parse Image</button>
+      <div id="status" class="info" style="display: none"></div>
+    </div>
+
+    <div class="panel" id="cal-panel">
+      <h2>2. Calibrate</h2>
+      <div id="cal-info"></div>
+      <div id="cal-img-wrap"><canvas id="cal-canvas"></canvas></div>
+      <div class="cal-btns">
+        <button class="btn-gray" onclick="calibrate(1)">Gray</button>
+        <button class="btn-pink" onclick="calibrate(2)">Pink</button>
+        <button class="btn-orange" onclick="calibrate(3)">Orange</button>
+        <button class="btn-blue" onclick="calibrate(4)">Blue</button>
+        <button class="btn-skip" onclick="calibrate(0)">Accept / Skip</button>
+      </div>
+      <div id="board-text"></div>
+      <div class="color-key">
+        <span><span class="sw" style="background: #aaa"></span> Gray</span>
+        <span><span class="sw" style="background: #e3a"></span> Pink</span>
+        <span><span class="sw" style="background: #fa0"></span> Orange</span>
+        <span><span class="sw" style="background: #4af"></span> Blue</span>
+      </div>
+      <button id="btn-solve" onclick="startSolve()" style="display: none">Solve!</button>
+    </div>
+
+    <div class="panel" id="sol-panel">
+      <h2>3. Solution</h2>
+      <div id="progress"></div>
+      <div class="step-nav">
+        <button onclick="prevStep()">&#8592; Prev</button>
+        <span id="step-label">Step 0 / 0</span>
+        <button onclick="nextStep()">Next &#8594;</button>
+      </div>
+      <canvas id="sol-canvas"></canvas>
+      <div id="sol-info"></div>
+    </div>
+
+    <script src="parser.js"></script>
+    <script src="solver.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
