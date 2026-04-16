@@ -83,11 +83,21 @@
                 align-items: center;
                 gap: 12px;
                 margin: 12px 0;
+                width: 100%;
+                box-sizing: border-box;
+                overflow: hidden;
+            }
+            .step-nav button {
+                flex-shrink: 0;
             }
             .step-nav span {
                 font-size: 18px;
-                min-width: 140px;
+                flex: 1;
+                min-width: 0;
                 text-align: center;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
             #status {
                 margin: 10px 0;
