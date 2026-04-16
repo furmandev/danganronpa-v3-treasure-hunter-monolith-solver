@@ -211,6 +211,61 @@ function renderPerspectiveCanvas() {
         ctx.fillText(String(i + 1), p.x, p.y);
     }
     ctx.restore();
+
+    // Spyglass: draw magnifier when dragging a corner
+    if (perspectiveState.dragIndex !== -1) {
+        const dragPt = pts[perspectiveState.dragIndex];
+        const LENS_R = 90; // radius of the magnifier circle on canvas
+        const ZOOM = 4; // zoom factor
+        const SRC_R = LENS_R / ZOOM; // radius in source image coords
+
+        // Source region in image space
+        const imgPt = perspectiveState.points[perspectiveState.dragIndex];
+        const sx = d.offsetX + imgPt.x * d.scale - SRC_R;
+        const sy = d.offsetY + imgPt.y * d.scale - SRC_R;
+
+        // Position lens near the dragged corner, offset inward so it doesn't cover the handle
+        const OFFSET = LENS_R + 24;
+        const lensX = Math.min(
+            Math.max(dragPt.x + (dragPt.x < canvas.width / 2 ? OFFSET : -OFFSET), LENS_R + 4),
+            canvas.width - LENS_R - 4,
+        );
+        const lensY = Math.min(
+            Math.max(dragPt.y + (dragPt.y < canvas.height / 2 ? OFFSET : -OFFSET), LENS_R + 4),
+            canvas.height - LENS_R - 4,
+        );
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(lensX, lensY, LENS_R, 0, Math.PI * 2);
+        ctx.clip();
+
+        // Draw dark background then zoomed image region
+        ctx.fillStyle = "#0d1117";
+        ctx.fillRect(lensX - LENS_R, lensY - LENS_R, LENS_R * 2, LENS_R * 2);
+        ctx.drawImage(canvas, sx, sy, SRC_R * 2, SRC_R * 2, lensX - LENS_R, lensY - LENS_R, LENS_R * 2, LENS_R * 2);
+
+        ctx.restore();
+
+        // Crosshair at center
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,75,75,0.9)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(lensX - 10, lensY);
+        ctx.lineTo(lensX + 10, lensY);
+        ctx.moveTo(lensX, lensY - 10);
+        ctx.lineTo(lensX, lensY + 10);
+        ctx.stroke();
+
+        // Lens border
+        ctx.beginPath();
+        ctx.arc(lensX, lensY, LENS_R, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ff4b4b";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.restore();
+    }
 }
 
 function getCanvasPointerPos(e) {
@@ -261,6 +316,7 @@ function onPerspectivePointerUp(e) {
         if (canvas.hasPointerCapture(e.pointerId)) {
             canvas.releasePointerCapture(e.pointerId);
         }
+        renderPerspectiveCanvas(); // hide spyglass
     }
 }
 
