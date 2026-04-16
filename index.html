@@ -452,9 +452,7 @@
                     <img id="upload-preview" alt="Selected board image preview" />
                     <div id="upload-meta"></div>
                     <div class="upload-actions">
-                        <button type="button" class="btn-secondary" onclick="openPerspectiveModal()">
-                            Perspective
-                        </button>
+                        <button type="button" class="btn-secondary" onclick="openPerspectiveModal()">Crop</button>
                         <button type="button" onclick="triggerFileSelect()">Replace</button>
                         <button type="button" class="btn-skip" onclick="clearSelectedImage()">Clear</button>
                     </div>
@@ -500,6 +498,7 @@
                 <button class="btn-orange" onclick="calibrate(3)">Orange</button>
                 <button class="btn-blue" onclick="calibrate(4)">Blue</button>
                 <button class="btn-skip" onclick="calibrate(0)">Accept / Skip</button>
+                <button id="btn-undo-cal" onclick="undoCalibration()" style="display: none">&#8630; Undo</button>
             </div>
             <div id="board-label">Your grid</div>
             <div id="board-text"></div>

@@ -12,6 +12,7 @@ let COLS = 22,
     ROWS = 11;
 let currentStep = 0;
 let pinned = new Set(); // flat indices that have been manually confirmed
+let calHistory = []; // undo stack for calibration steps
 let solveStarted = false;
 let solveWorker = null;
 let selectedImageFile = null;
@@ -197,18 +198,54 @@ function renderPerspectiveCanvas() {
 
     for (let i = 0; i < pts.length; i++) {
         const p = pts[i];
+        const ARM = 13; // crosshair arm length
+        const GAP = 7; // gap around center (= circle radius)
+        const R = GAP;
+
+        // Shadow layer for contrast
+        ctx.save();
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
         ctx.beginPath();
-        ctx.fillStyle = "#fff";
-        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "#ff4b4b";
+        ctx.moveTo(p.x - ARM, p.y);
+        ctx.lineTo(p.x - GAP, p.y);
+        ctx.moveTo(p.x + GAP, p.y);
+        ctx.lineTo(p.x + ARM, p.y);
+        ctx.moveTo(p.x, p.y - ARM);
+        ctx.lineTo(p.x, p.y - GAP);
+        ctx.moveTo(p.x, p.y + GAP);
+        ctx.lineTo(p.x, p.y + ARM);
         ctx.stroke();
-        ctx.fillStyle = "#0d1117";
-        ctx.font = "700 11px -apple-system, BlinkMacSystemFont, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(i + 1), p.x, p.y);
+        ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+
+        // Outer arms + circle
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 75, 75, 0.85)";
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(p.x - ARM, p.y);
+        ctx.lineTo(p.x - GAP, p.y);
+        ctx.moveTo(p.x + GAP, p.y);
+        ctx.lineTo(p.x + ARM, p.y);
+        ctx.moveTo(p.x, p.y - ARM);
+        ctx.lineTo(p.x, p.y - GAP);
+        ctx.moveTo(p.x, p.y + GAP);
+        ctx.lineTo(p.x, p.y + ARM);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+        ctx.stroke();
+        // White center dot
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.fill();
+        ctx.restore();
     }
     ctx.restore();
 
@@ -247,18 +284,8 @@ function renderPerspectiveCanvas() {
 
         ctx.restore();
 
-        // Crosshair at center
-        ctx.save();
-        ctx.strokeStyle = "rgba(255,75,75,0.9)";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(lensX - 10, lensY);
-        ctx.lineTo(lensX + 10, lensY);
-        ctx.moveTo(lensX, lensY - 10);
-        ctx.lineTo(lensX, lensY + 10);
-        ctx.stroke();
-
         // Lens border
+        ctx.save();
         ctx.beginPath();
         ctx.arc(lensX, lensY, LENS_R, 0, Math.PI * 2);
         ctx.strokeStyle = "#ff4b4b";
@@ -283,7 +310,7 @@ function onPerspectivePointerDown(e) {
     const canvas = document.getElementById("perspective-canvas");
     const pos = getCanvasPointerPos(e);
     let nearestIdx = -1;
-    let bestDist = 22;
+    let bestDist = 28;
 
     for (let i = 0; i < perspectiveState.points.length; i++) {
         const p = imagePtToCanvas(perspectiveState.points[i]);
@@ -415,11 +442,15 @@ function applyPerspective() {
             const estH = Math.max(32, Math.round((distance(p0, p3) + distance(p1, p2)) / 2));
             const maxDim = 2200;
             const downscale = Math.min(1, maxDim / Math.max(estW, estH));
-            const outW = Math.max(32, Math.round(estW * downscale));
-            const outH = Math.max(32, Math.round(estH * downscale));
+            const cropW = Math.max(32, Math.round(estW * downscale));
+            const cropH = Math.max(32, Math.round(estH * downscale));
+            // Add padding so grid lines never land at the image edge
+            const PAD = Math.round(Math.max(cropW, cropH) * 0.01);
+            const outW = cropW + PAD * 2;
+            const outH = cropH + PAD * 2;
 
             const srcPts = [p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y];
-            const dstPts = [0, 0, outW - 1, 0, outW - 1, outH - 1, 0, outH - 1];
+            const dstPts = [PAD, PAD, PAD + cropW - 1, PAD, PAD + cropW - 1, PAD + cropH - 1, PAD, PAD + cropH - 1];
             const perspT = PerspT(srcPts, dstPts);
 
             const srcData = perspectiveState.srcCtx.getImageData(
@@ -893,10 +924,48 @@ function drawCalCanvas(highlightIdx) {
     ctx.strokeRect(hx, hy, hw, hh);
 }
 
+function updateUndoButton() {
+    const btn = document.getElementById("btn-undo-cal");
+    if (btn) btn.style.display = calHistory.length > 0 ? "" : "none";
+}
+
+function undoCalibration() {
+    if (calHistory.length === 0) return;
+    const snap = calHistory.pop();
+    parseResult.colorIds = snap.colorIds;
+    parseResult.confidences = snap.confidences;
+    parseResult.secondBests = snap.secondBests;
+    parseResult.centers = snap.centers;
+    pinned = snap.pinned;
+    calQueue = snap.calQueue;
+    updateBoardText();
+    updateUndoButton();
+    if (calQueue.length > 0) {
+        drawCalCanvas(calQueue[0]);
+        const idx = calQueue[0];
+        const r = Math.floor(idx / COLS);
+        const c = idx % COLS;
+        const conf = (parseResult.confidences[idx] * 100).toFixed(0);
+        document.getElementById("cal-info").innerHTML =
+            `Cell (${r + 1}, ${c + 1}) — guessed <b>${COLORS[parseResult.colorIds[idx]]}</b>. ` +
+            `Confidence: <b>${conf}%</b>`;
+    }
+}
+
 function calibrate(colorId) {
     if (!parseResult || calQueue.length === 0) return;
 
     const idx = calQueue[0];
+    // Save snapshot for undo
+    calHistory.push({
+        colorIds: parseResult.colorIds.slice(),
+        confidences: parseResult.confidences.slice(),
+        secondBests: parseResult.secondBests ? parseResult.secondBests.slice() : [],
+        centers: JSON.parse(JSON.stringify(parseResult.centers)),
+        pinned: new Set(pinned),
+        calQueue: calQueue.slice(),
+    });
+    updateUndoButton();
     if (colorId === 0) {
         // Accept current guess
         pinned.add(idx);
