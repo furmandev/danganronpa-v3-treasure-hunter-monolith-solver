@@ -12,6 +12,21 @@ let COLS = 22,
     ROWS = 11;
 let currentStep = 0;
 let pinned = new Set(); // flat indices that have been manually confirmed
+let solveStarted = false;
+let solveWorker = null;
+let selectedImageFile = null;
+let selectedImageUrl = null;
+let stepAnimationFrame = null;
+let suppressAutoPerspectiveOpen = false;
+let isApplyingPerspective = false;
+let perspectiveState = {
+    image: null,
+    points: [],
+    dragIndex: -1,
+    display: null,
+    srcCanvas: null,
+    srcCtx: null,
+};
 
 // ---- Status ----
 function setStatus(msg, type) {
@@ -21,10 +36,585 @@ function setStatus(msg, type) {
     el.textContent = msg;
 }
 
+function setUploadStatus(msg, kind) {
+    const el = document.getElementById("upload-status");
+    el.textContent = msg;
+    el.className = `upload-status${kind ? ` ${kind}` : ""}`;
+}
+
+function setParseEnabled(isEnabled) {
+    document.getElementById("btn-parse").disabled = !isEnabled;
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    return `${(kb / 1024).toFixed(2)} MB`;
+}
+
+function triggerFileSelect() {
+    document.getElementById("file-input").click();
+}
+
+function clearSelectedImage() {
+    closePerspectiveModal();
+    selectedImageFile = null;
+    if (selectedImageUrl) {
+        URL.revokeObjectURL(selectedImageUrl);
+        selectedImageUrl = null;
+    }
+
+    document.getElementById("file-input").value = "";
+    document.getElementById("upload-preview-wrap").style.display = "none";
+    document.getElementById("upload-empty").style.display = "block";
+    document.getElementById("upload-meta").textContent = "";
+    setParseEnabled(false);
+    setUploadStatus("No image selected.");
+}
+
+function useSelectedImage(file, objectUrl, width, height) {
+    if (selectedImageUrl) URL.revokeObjectURL(selectedImageUrl);
+    selectedImageUrl = objectUrl;
+    selectedImageFile = file;
+
+    const preview = document.getElementById("upload-preview");
+    preview.src = objectUrl;
+    const fileName = file.name || "clipboard-image.png";
+    document.getElementById("upload-meta").innerHTML =
+        `<b>${fileName}</b><br>${width} x ${height} px, ${formatBytes(file.size)}`;
+    document.getElementById("upload-empty").style.display = "none";
+    document.getElementById("upload-preview-wrap").style.display = "flex";
+    setParseEnabled(true);
+    setUploadStatus("Image ready to parse.", "ok");
+
+    if (!suppressAutoPerspectiveOpen) {
+        setTimeout(() => {
+            openPerspectiveModal();
+        }, 0);
+    }
+    suppressAutoPerspectiveOpen = false;
+}
+
+function loadImageElement(img, src) {
+    return new Promise((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Could not load image."));
+        img.src = src;
+    });
+}
+
+function getPerspectiveModal() {
+    return document.getElementById("perspective-modal");
+}
+
+function setPerspectiveBusy(isBusy, statusText) {
+    isApplyingPerspective = isBusy;
+    const applyBtn = document.getElementById("perspective-apply");
+    const resetBtn = document.getElementById("perspective-reset");
+    const cancelBtn = document.getElementById("perspective-cancel");
+    const statusEl = document.getElementById("perspective-status");
+
+    if (applyBtn) {
+        applyBtn.disabled = isBusy;
+        applyBtn.textContent = isBusy ? "Applying..." : "Apply Perspective";
+    }
+    if (resetBtn) resetBtn.disabled = isBusy;
+    if (cancelBtn) cancelBtn.disabled = isBusy;
+    if (statusEl) statusEl.textContent = statusText || "";
+}
+
+function initPerspectivePoints(width, height) {
+    const insetX = width * 0.1;
+    const insetY = height * 0.1;
+    perspectiveState.points = [
+        { x: insetX, y: insetY },
+        { x: width - insetX, y: insetY },
+        { x: width - insetX, y: height - insetY },
+        { x: insetX, y: height - insetY },
+    ];
+}
+
+function updatePerspectiveDisplay() {
+    const canvas = document.getElementById("perspective-canvas");
+    const stage = canvas.parentElement;
+    const image = perspectiveState.image;
+    if (!image || !stage) return;
+
+    const stageWidth = Math.max(320, stage.clientWidth || 320);
+    const stageHeight = Math.max(260, stage.clientHeight || 260);
+    const scale = Math.min(stageWidth / image.width, stageHeight / image.height);
+    const drawW = Math.max(1, Math.round(image.width * scale));
+    const drawH = Math.max(1, Math.round(image.height * scale));
+    const offsetX = Math.round((stageWidth - drawW) / 2);
+    const offsetY = Math.round((stageHeight - drawH) / 2);
+
+    canvas.width = stageWidth;
+    canvas.height = stageHeight;
+    perspectiveState.display = { scale, drawW, drawH, offsetX, offsetY };
+}
+
+function imagePtToCanvas(pt) {
+    const d = perspectiveState.display;
+    return {
+        x: d.offsetX + pt.x * d.scale,
+        y: d.offsetY + pt.y * d.scale,
+    };
+}
+
+function canvasPtToImage(x, y) {
+    const d = perspectiveState.display;
+    const img = perspectiveState.image;
+    return {
+        x: Math.min(img.width, Math.max(0, (x - d.offsetX) / d.scale)),
+        y: Math.min(img.height, Math.max(0, (y - d.offsetY) / d.scale)),
+    };
+}
+
+function renderPerspectiveCanvas() {
+    const canvas = document.getElementById("perspective-canvas");
+    const ctx = canvas.getContext("2d");
+    const d = perspectiveState.display;
+    const image = perspectiveState.image;
+    if (!ctx || !d || !image) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0d1117";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, d.offsetX, d.offsetY, d.drawW, d.drawH);
+
+    const pts = perspectiveState.points.map((p) => imagePtToCanvas(p));
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 88, 88, 0.98)";
+    ctx.fillStyle = "rgba(255, 88, 88, 0.18)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        ctx.beginPath();
+        ctx.fillStyle = "#fff";
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#ff4b4b";
+        ctx.stroke();
+        ctx.fillStyle = "#0d1117";
+        ctx.font = "700 11px -apple-system, BlinkMacSystemFont, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(i + 1), p.x, p.y);
+    }
+    ctx.restore();
+}
+
+function getCanvasPointerPos(e) {
+    const canvas = document.getElementById("perspective-canvas");
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: ((e.clientX - rect.left) / rect.width) * canvas.width,
+        y: ((e.clientY - rect.top) / rect.height) * canvas.height,
+    };
+}
+
+function onPerspectivePointerDown(e) {
+    const modal = getPerspectiveModal();
+    if (!modal || !modal.classList.contains("open") || !perspectiveState.display || isApplyingPerspective) return;
+    const canvas = document.getElementById("perspective-canvas");
+    const pos = getCanvasPointerPos(e);
+    let nearestIdx = -1;
+    let bestDist = 22;
+
+    for (let i = 0; i < perspectiveState.points.length; i++) {
+        const p = imagePtToCanvas(perspectiveState.points[i]);
+        const dist = Math.hypot(p.x - pos.x, p.y - pos.y);
+        if (dist < bestDist) {
+            bestDist = dist;
+            nearestIdx = i;
+        }
+    }
+
+    if (nearestIdx !== -1) {
+        perspectiveState.dragIndex = nearestIdx;
+        canvas.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    }
+}
+
+function onPerspectivePointerMove(e) {
+    if (perspectiveState.dragIndex === -1 || !perspectiveState.display || isApplyingPerspective) return;
+    const pos = getCanvasPointerPos(e);
+    perspectiveState.points[perspectiveState.dragIndex] = canvasPtToImage(pos.x, pos.y);
+    renderPerspectiveCanvas();
+    e.preventDefault();
+}
+
+function onPerspectivePointerUp(e) {
+    const canvas = document.getElementById("perspective-canvas");
+    if (perspectiveState.dragIndex !== -1) {
+        perspectiveState.dragIndex = -1;
+        if (canvas.hasPointerCapture(e.pointerId)) {
+            canvas.releasePointerCapture(e.pointerId);
+        }
+    }
+}
+
+async function openPerspectiveModal() {
+    if (!selectedImageUrl || !selectedImageFile) {
+        setUploadStatus("Select an image before perspective crop.", "error");
+        return;
+    }
+    if (typeof PerspT === "undefined") {
+        setUploadStatus("Perspective tool failed to load. Refresh and try again.", "error");
+        return;
+    }
+
+    const modal = getPerspectiveModal();
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    setPerspectiveBusy(false, "");
+
+    const img = new Image();
+    try {
+        await loadImageElement(img, selectedImageUrl);
+    } catch (err) {
+        closePerspectiveModal();
+        setUploadStatus("Could not load image for perspective crop.", "error");
+        return;
+    }
+
+    perspectiveState.image = img;
+    perspectiveState.srcCanvas = document.createElement("canvas");
+    perspectiveState.srcCanvas.width = img.width;
+    perspectiveState.srcCanvas.height = img.height;
+    perspectiveState.srcCtx = perspectiveState.srcCanvas.getContext("2d", { willReadFrequently: true });
+    perspectiveState.srcCtx.drawImage(img, 0, 0);
+    initPerspectivePoints(img.width, img.height);
+    updatePerspectiveDisplay();
+    renderPerspectiveCanvas();
+}
+
+function closePerspectiveModal() {
+    if (isApplyingPerspective) return;
+    perspectiveState.dragIndex = -1;
+    perspectiveState.image = null;
+    perspectiveState.points = [];
+    perspectiveState.display = null;
+    perspectiveState.srcCanvas = null;
+    perspectiveState.srcCtx = null;
+    const modal = getPerspectiveModal();
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+}
+
+function resetPerspective() {
+    if (!perspectiveState.image || isApplyingPerspective) return;
+    initPerspectivePoints(perspectiveState.image.width, perspectiveState.image.height);
+    renderPerspectiveCanvas();
+}
+
+function sampleBilinear(imageData, width, height, x, y) {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const x1 = Math.min(width - 1, x0 + 1);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const dx = x - x0;
+    const dy = y - y0;
+
+    const i00 = (y0 * width + x0) * 4;
+    const i10 = (y0 * width + x1) * 4;
+    const i01 = (y1 * width + x0) * 4;
+    const i11 = (y1 * width + x1) * 4;
+
+    const out = [0, 0, 0, 0];
+    for (let c = 0; c < 4; c++) {
+        const top = imageData[i00 + c] * (1 - dx) + imageData[i10 + c] * dx;
+        const bottom = imageData[i01 + c] * (1 - dx) + imageData[i11 + c] * dx;
+        out[c] = top * (1 - dy) + bottom * dy;
+    }
+    return out;
+}
+
+function distance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function applyPerspective() {
+    if (!perspectiveState.image || perspectiveState.points.length !== 4 || !selectedImageFile || isApplyingPerspective)
+        return;
+
+    setPerspectiveBusy(true, "Applying perspective correction...");
+    setUploadStatus("Applying perspective correction...");
+
+    setTimeout(() => {
+        try {
+            const [p0, p1, p2, p3] = perspectiveState.points;
+            const estW = Math.max(32, Math.round((distance(p0, p1) + distance(p3, p2)) / 2));
+            const estH = Math.max(32, Math.round((distance(p0, p3) + distance(p1, p2)) / 2));
+            const maxDim = 2200;
+            const downscale = Math.min(1, maxDim / Math.max(estW, estH));
+            const outW = Math.max(32, Math.round(estW * downscale));
+            const outH = Math.max(32, Math.round(estH * downscale));
+
+            const srcPts = [p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y];
+            const dstPts = [0, 0, outW - 1, 0, outW - 1, outH - 1, 0, outH - 1];
+            const perspT = PerspT(srcPts, dstPts);
+
+            const srcData = perspectiveState.srcCtx.getImageData(
+                0,
+                0,
+                perspectiveState.srcCanvas.width,
+                perspectiveState.srcCanvas.height,
+            );
+            const srcBuf = srcData.data;
+            const srcW = perspectiveState.srcCanvas.width;
+            const srcH = perspectiveState.srcCanvas.height;
+
+            const outCanvas = document.createElement("canvas");
+            outCanvas.width = outW;
+            outCanvas.height = outH;
+            const outCtx = outCanvas.getContext("2d", { willReadFrequently: true });
+            const outImage = outCtx.createImageData(outW, outH);
+            const outBuf = outImage.data;
+
+            for (let y = 0; y < outH; y++) {
+                for (let x = 0; x < outW; x++) {
+                    const [sx, sy] = perspT.transformInverse(x, y);
+                    const outIdx = (y * outW + x) * 4;
+                    if (sx < 0 || sy < 0 || sx >= srcW - 1 || sy >= srcH - 1) {
+                        outBuf[outIdx + 0] = 0;
+                        outBuf[outIdx + 1] = 0;
+                        outBuf[outIdx + 2] = 0;
+                        outBuf[outIdx + 3] = 255;
+                        continue;
+                    }
+
+                    const rgba = sampleBilinear(srcBuf, srcW, srcH, sx, sy);
+                    outBuf[outIdx + 0] = rgba[0];
+                    outBuf[outIdx + 1] = rgba[1];
+                    outBuf[outIdx + 2] = rgba[2];
+                    outBuf[outIdx + 3] = rgba[3];
+                }
+            }
+
+            outCtx.putImageData(outImage, 0, 0);
+            const mimeType = selectedImageFile.type || "image/png";
+            const extension = mimeType === "image/jpeg" ? ".jpg" : ".png";
+
+            outCanvas.toBlob(
+                (blob) => {
+                    if (!blob) {
+                        setPerspectiveBusy(false, "");
+                        setUploadStatus("Could not apply perspective correction. Try again.", "error");
+                        return;
+                    }
+                    const correctedFile = new File(
+                        [blob],
+                        fileNameWithSuffix(selectedImageFile.name || "image.png", "-perspective", extension),
+                        {
+                            type: blob.type || mimeType,
+                        },
+                    );
+
+                    setPerspectiveBusy(false, "");
+                    suppressAutoPerspectiveOpen = true;
+                    closePerspectiveModal();
+                    handleSelectedFile(correctedFile);
+                    setUploadStatus("Perspective-corrected image ready to parse.", "ok");
+                },
+                mimeType,
+                0.95,
+            );
+        } catch (err) {
+            setPerspectiveBusy(false, "");
+            setUploadStatus("Could not apply perspective correction. Try again.", "error");
+            console.error(err);
+        }
+    }, 0);
+}
+
+function fileNameWithSuffix(fileName, suffix, fallbackExt) {
+    const dotIdx = fileName.lastIndexOf(".");
+    if (dotIdx === -1) return `${fileName}${suffix}${fallbackExt}`;
+    return `${fileName.slice(0, dotIdx)}${suffix}${fileName.slice(dotIdx)}`;
+}
+
+function handleSelectedFile(file) {
+    if (!file) return;
+
+    if (!file.type || !file.type.startsWith("image/")) {
+        setUploadStatus("Please select a valid image file.", "error");
+        setParseEnabled(false);
+        return;
+    }
+
+    setUploadStatus("Validating image...");
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+        if (img.width < 200 || img.height < 100) {
+            URL.revokeObjectURL(objectUrl);
+            setUploadStatus("Image is too small. Please use a full screenshot.", "error");
+            setParseEnabled(false);
+            return;
+        }
+        useSelectedImage(file, objectUrl, img.width, img.height);
+    };
+    img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        setUploadStatus("Could not read that image. Try another file.", "error");
+        setParseEnabled(false);
+    };
+    img.src = objectUrl;
+}
+
+function extractClipboardImageFile(event) {
+    const items = event.clipboardData && event.clipboardData.items ? event.clipboardData.items : [];
+    for (const item of items) {
+        if (item.type && item.type.startsWith("image/")) {
+            return item.getAsFile();
+        }
+    }
+    return null;
+}
+
+async function grabImageFromClipboard() {
+    showPanel("load-panel");
+
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+        setUploadStatus("Clipboard read is not supported here. Use paste (Ctrl+V) instead.", "error");
+        return;
+    }
+
+    try {
+        setUploadStatus("Reading clipboard...");
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+            for (const type of item.types) {
+                if (!type.startsWith("image/")) continue;
+                const blob = await item.getType(type);
+                const ext = type.split("/")[1] || "png";
+                const file = new File([blob], `clipboard-${Date.now()}.${ext}`, { type });
+                handleSelectedFile(file);
+                return;
+            }
+        }
+
+        setUploadStatus("Clipboard does not contain an image.", "error");
+    } catch (err) {
+        setUploadStatus("Could not read clipboard. Allow permission and try again.", "error");
+    }
+}
+
+function initUploader() {
+    const zone = document.getElementById("upload-zone");
+    const input = document.getElementById("file-input");
+    const perspectiveModal = getPerspectiveModal();
+    const perspectiveCanvas = document.getElementById("perspective-canvas");
+
+    zone.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        triggerFileSelect();
+    });
+    zone.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            triggerFileSelect();
+        }
+    });
+
+    input.addEventListener("change", () => {
+        handleSelectedFile(input.files[0]);
+    });
+
+    for (const evt of ["dragenter", "dragover"]) {
+        zone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            zone.classList.add("dragover");
+        });
+    }
+    for (const evt of ["dragleave", "drop"]) {
+        zone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            zone.classList.remove("dragover");
+        });
+    }
+
+    zone.addEventListener("drop", (e) => {
+        const file = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files[0] : null;
+        handleSelectedFile(file);
+    });
+
+    zone.addEventListener("paste", (e) => {
+        const file = extractClipboardImageFile(e);
+        if (!file) return;
+        e.preventDefault();
+        handleSelectedFile(file);
+    });
+
+    document.addEventListener("paste", (e) => {
+        const file = extractClipboardImageFile(e);
+        if (!file) return;
+        e.preventDefault();
+        handleSelectedFile(file);
+        showPanel("load-panel");
+        setUploadStatus("Pasted image from clipboard. Validating...");
+    });
+
+    perspectiveModal.addEventListener("click", (e) => {
+        if (e.target === perspectiveModal) {
+            closePerspectiveModal();
+        }
+    });
+
+    perspectiveCanvas.addEventListener("pointerdown", onPerspectivePointerDown);
+    perspectiveCanvas.addEventListener("pointermove", onPerspectivePointerMove);
+    perspectiveCanvas.addEventListener("pointerup", onPerspectivePointerUp);
+    perspectiveCanvas.addEventListener("pointercancel", onPerspectivePointerUp);
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            closePerspectiveModal();
+        }
+    });
+
+    window.addEventListener("resize", () => {
+        if (perspectiveModal.classList.contains("open") && perspectiveState.image) {
+            updatePerspectiveDisplay();
+            renderPerspectiveCanvas();
+        }
+    });
+
+    clearSelectedImage();
+}
+
+function showPanel(panelId) {
+    document.getElementById("load-panel").style.display = panelId === "load-panel" ? "block" : "none";
+    document.getElementById("cal-panel").style.display = panelId === "cal-panel" ? "block" : "none";
+    document.getElementById("sol-panel").style.display = panelId === "sol-panel" ? "block" : "none";
+}
+
+function setSolvingState(isSolving) {
+    document.getElementById("sol-loading").style.display = isSolving ? "flex" : "none";
+    document.getElementById("sol-canvas").style.display = isSolving ? "none" : "block";
+    document.querySelector(".step-nav").style.display = isSolving ? "none" : "flex";
+    document.getElementById("sol-info").style.display = isSolving ? "none" : "block";
+}
+
 // ---- Parse ----
 function startParse() {
-    const fileInput = document.getElementById("file-input");
-    if (!fileInput.files.length) {
+    if (solveWorker) {
+        solveWorker.terminate();
+        solveWorker = null;
+    }
+
+    if (!selectedImageFile) {
         setStatus("Select an image first.", "error");
         return;
     }
@@ -50,9 +640,23 @@ function startParse() {
                 try {
                     parseResult = parseImage(imgData, imgW, imgH, COLS, ROWS);
                     pinned = new Set();
+                    solveStarted = false;
+
+                    const totalCells = ROWS * COLS;
+                    const minConf = parseInt(document.getElementById("min-conf").value) / 100;
+                    const lowCount = parseResult.confidences.filter((c) => c < minConf).length;
+                    if (lowCount > totalCells * 0.2) {
+                        const pct = Math.round((lowCount / totalCells) * 100);
+                        setStatus(
+                            `⚠️ ${pct}% of cells couldn't be confidently read. ` +
+                                `Try using a higher-resolution photo, or use the perspective tool to straighten and crop the board more tightly.`,
+                            "error",
+                        );
+                        return;
+                    }
+
                     setStatus("Parsed! Starting calibration...", "success");
-                    document.getElementById("cal-panel").style.display = "block";
-                    document.getElementById("sol-panel").style.display = "none";
+                    showPanel("cal-panel");
                     updateBoardText();
                     nextCalibration();
                 } catch (err) {
@@ -63,7 +667,7 @@ function startParse() {
         };
         img.src = e.target.result;
     };
-    reader.readAsDataURL(fileInput.files[0]);
+    reader.readAsDataURL(selectedImageFile);
 }
 
 // ---- Board Text ----
@@ -75,23 +679,28 @@ const COLOR_CSS = {
 };
 
 function updateBoardText() {
+    const label = document.getElementById("board-label");
     const el = document.getElementById("board-text");
+    label.style.display = "block";
     el.style.display = "block";
     el.innerHTML = "";
+    const minConf = parseInt(document.getElementById("min-conf").value) / 100;
     for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) {
-            const cid = parseResult.colorIds[r * COLS + c];
+            const idx = r * COLS + c;
+            const cid = parseResult.colorIds[idx];
             const span = document.createElement("span");
             span.textContent = CCHARS[cid];
             span.style.color = COLOR_CSS[cid] || "#fff";
             span.style.fontWeight = "bold";
+            if (!pinned.has(idx) && parseResult.confidences[idx] < minConf) {
+                span.classList.add("low-conf");
+            }
             el.appendChild(span);
-            if (c < COLS - 1) el.appendChild(document.createTextNode(" "));
         }
         el.appendChild(document.createTextNode("\n"));
     }
 }
-
 // ---- Calibration ----
 let calQueue = []; // indices of borderline cells sorted by confidence
 
@@ -108,9 +717,15 @@ function nextCalibration() {
     calQueue.sort((a, b) => parseResult.confidences[a] - parseResult.confidences[b]);
 
     if (calQueue.length === 0) {
-        document.getElementById("cal-info").textContent = "✅ All cells above confidence threshold!";
-        document.getElementById("btn-solve").style.display = "inline-block";
+        document.getElementById("cal-info").textContent = "✅ All cells above confidence threshold! Starting solver...";
+        document.getElementById("btn-solve").style.display = "none";
         drawCalCanvas(null);
+
+        if (!solveStarted) {
+            solveStarted = true;
+            setStatus("Calibration complete. Running solver...", "info");
+            setTimeout(() => startSolve(), 50);
+        }
         return;
     }
 
@@ -136,11 +751,14 @@ function drawCalCanvas(highlightIdx) {
     const ctx = canvas.getContext("2d");
 
     if (highlightIdx === null) {
-        canvas.width = 500;
-        canvas.height = 400;
+        const maxWidth = Math.min(window.innerWidth - 40, 500);
+        const canvasW = maxWidth;
+        const canvasH = Math.round(maxWidth * (400 / 500));
+        canvas.width = canvasW;
+        canvas.height = canvasH;
         const ctx2 = canvas.getContext("2d");
         ctx2.fillStyle = "#111";
-        ctx2.fillRect(0, 0, 500, 400);
+        ctx2.fillRect(0, 0, canvasW, canvasH);
         return;
     }
 
@@ -174,9 +792,11 @@ function drawCalCanvas(highlightIdx) {
         `naturalSize: ${imgElement?.naturalWidth}x${imgElement?.naturalHeight}`,
     );
 
-    // Fixed canvas size so buttons don't jump around
-    const CANVAS_W = 500,
-        CANVAS_H = 400;
+    // Responsive canvas size: scale down on mobile, keep 500x400 on desktop
+    // Aspect ratio is 500:400 = 1.25:1
+    const maxWidth = Math.min(window.innerWidth - 40, 500); // 40px margin for padding/borders
+    const CANVAS_W = maxWidth;
+    const CANVAS_H = Math.round(maxWidth * (400 / 500)); // Maintain 1.25:1 aspect ratio
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
 
@@ -251,35 +871,77 @@ function calibrate(colorId) {
 
 // ---- Solve ----
 function startSolve() {
+    if (!parseResult) return;
+
     const maxStates = parseInt(document.getElementById("max-states").value) || 10000;
     setStatus("Solving... this may take a moment.", "info");
-    document.getElementById("progress").textContent = "Starting solver...";
-    document.getElementById("sol-panel").style.display = "block";
+    document.getElementById("progress").textContent = "Running solver (0 states explored)...";
+    showPanel("sol-panel");
+    setSolvingState(true);
 
     // Build grid as flat Int8Array
     const grid = new Int8Array(ROWS * COLS);
     for (let i = 0; i < ROWS * COLS; i++) grid[i] = parseResult.colorIds[i];
 
-    // Run solver async to not block UI
-    setTimeout(() => {
-        try {
-            solveResult = solve(grid, ROWS, COLS, maxStates, (explored, bestClear) => {
-                document.getElementById("progress").textContent =
-                    `${explored} states explored, best: ${bestClear.toFixed(1)}%`;
-            });
+    if (solveWorker) {
+        solveWorker.terminate();
+        solveWorker = null;
+    }
+
+    solveWorker = new Worker("src/solver-worker.js");
+    solveWorker.onmessage = (event) => {
+        const data = event.data || {};
+
+        if (data.type === "progress") {
+            document.getElementById("progress").textContent =
+                `${data.explored} states explored, best: ${data.bestClear.toFixed(1)}%`;
+            return;
+        }
+
+        if (data.type === "result") {
+            solveResult = data.result;
+            solveResult.states = solveResult.states.map((s) => (s instanceof Int8Array ? s : new Int8Array(s)));
 
             const pct = solveResult.clearRate.toFixed(1);
             const steps = solveResult.solution.length;
-            setStatus(`Done! Cleared ${pct}% in ${steps} steps.`, "success");
-            document.getElementById("progress").textContent = `Cleared ${pct}% in ${steps} steps`;
+            setStatus(`Solved! We can clear ${pct}% of the board in ${steps} steps:`, "success");
+            document.getElementById("progress").textContent =
+                `Solved! We can clear ${pct}% of the board in ${steps} steps:`;
+            setSolvingState(false);
 
             currentStep = 0;
             showStep();
-        } catch (err) {
-            setStatus("Solver error: " + err.message, "error");
-            console.error(err);
+
+            solveWorker.terminate();
+            solveWorker = null;
+            return;
         }
-    }, 50);
+
+        if (data.type === "error") {
+            setStatus("Solver error: " + data.message, "error");
+            setSolvingState(false);
+            if (solveWorker) {
+                solveWorker.terminate();
+                solveWorker = null;
+            }
+        }
+    };
+
+    solveWorker.onerror = () => {
+        setStatus("Solver error: Worker failed to execute.", "error");
+        setSolvingState(false);
+        if (solveWorker) {
+            solveWorker.terminate();
+            solveWorker = null;
+        }
+    };
+
+    solveWorker.postMessage({
+        grid: Array.from(grid),
+        rows: ROWS,
+        cols: COLS,
+        maxStates,
+    });
 }
 
 // ---- Solution Step Viewer ----
@@ -321,10 +983,17 @@ const FALLBACK_COLORS = {
     4: "#5ba8e8",
 };
 
-function showStep() {
+function cancelStepAnimation() {
+    if (stepAnimationFrame !== null) {
+        cancelAnimationFrame(stepAnimationFrame);
+        stepAnimationFrame = null;
+    }
+}
+
+function drawSolutionStep(timestamp = 0) {
     if (!solveResult) return;
-    const total = solveResult.solution.length;
-    document.getElementById("step-label").textContent = `Step ${currentStep} / ${total}`;
+    const total = solveResult.states.length;
+    document.getElementById("step-label").textContent = `Step ${currentStep + 1} / ${total}`;
 
     const state = solveResult.states[currentStep];
     const canvas = document.getElementById("sol-canvas");
@@ -348,19 +1017,47 @@ function showStep() {
     }
 
     // Highlight action
-    if (currentStep < total) {
+    if (currentStep < solveResult.solution.length) {
         const [ar, ac] = solveResult.solution[currentStep];
-        ctx.strokeStyle = "#f00";
-        ctx.lineWidth = 4;
-        ctx.strokeRect(ac * CELL_PX, ar * CELL_PX, CELL_PX, CELL_PX);
-        ctx.strokeStyle = "#ff0";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(ac * CELL_PX + 2, ar * CELL_PX + 2, CELL_PX - 4, CELL_PX - 4);
+        const pulse = (Math.sin(timestamp / 420) + 1) / 2;
+        const tileX = ac * CELL_PX;
+        const tileY = ar * CELL_PX;
+        const centerX = tileX + CELL_PX / 2;
+        const centerY = tileY + CELL_PX / 2;
+        const scale = 1 + pulse * 0.14;
+        const outerSize = CELL_PX * scale;
+        const outerX = centerX - outerSize / 2;
+        const outerY = centerY - outerSize / 2;
+        const innerInset = 4 - pulse * 1.5;
+        const innerSize = CELL_PX - innerInset * 2;
+
+        ctx.save();
+        ctx.shadowColor = `rgba(255, 70, 70, ${0.55 + pulse * 0.35})`;
+        ctx.shadowBlur = 10 + pulse * 16;
+        ctx.strokeStyle = `rgba(255, 60, 60, ${0.75 + pulse * 0.25})`;
+        ctx.lineWidth = 4 + pulse * 3;
+        ctx.strokeRect(outerX, outerY, outerSize, outerSize);
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 245, 140, ${0.8 + (1 - pulse) * 0.2})`;
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(tileX + innerInset, tileY + innerInset, innerSize, innerSize);
+        ctx.fillStyle = `rgba(255, 255, 180, ${0.06 + pulse * 0.08})`;
+        ctx.fillRect(tileX + 1, tileY + 1, CELL_PX - 2, CELL_PX - 2);
+        ctx.restore();
 
         document.getElementById("sol-info").textContent = `Click the highlighted block at Row ${ar + 1}, Col ${ac + 1}`;
+        stepAnimationFrame = requestAnimationFrame(drawSolutionStep);
     } else {
         document.getElementById("sol-info").textContent = "Final board state";
+        stepAnimationFrame = null;
     }
+}
+
+function showStep() {
+    cancelStepAnimation();
+    drawSolutionStep(performance.now());
 }
 
 function prevStep() {
@@ -381,3 +1078,6 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "ArrowLeft") prevStep();
     if (e.key === "ArrowRight") nextStep();
 });
+
+showPanel("load-panel");
+initUploader();

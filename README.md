@@ -4,20 +4,13 @@ A static, client-side web solver for the Treasure Hunter Monolith minigame in Da
 
 ## Live URL
 
-TBD (GitHub Pages)
-
-## Tech
-
-- HTML
-- CSS
-- JavaScript
-- No backend, no build step
+https://furmandev.github.io/danganronpa-v3-treasure-hunter-monolith-solver/
 
 ## Usage
 
-1. Open `index.html` in your browser, or host the repository with GitHub Pages.
-2. Load a screenshot of your board.
-3. Parse, calibrate if needed, and follow the generated solution steps.
+Option 1: Use the live URL above.
+
+Option 2: Clone this repository and run `npx serve` in the project directory to serve it locally.
 
 ## Credits and Attribution
 

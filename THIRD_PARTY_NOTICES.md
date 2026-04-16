@@ -26,6 +26,14 @@ MIT License notice from upstream applies to copied or substantial portions.
 
 This project provides attribution to the author in good faith.
 
+## perspective-transform
+
+- Source: https://github.com/jlouthan/perspective-transform
+- License: MIT
+- Version: 1.1.3
+
+perspective-transform is loaded client-side to map a 4-corner board selection to a rectified image.
+
 ## Notes
 
 - Your project license is MIT (see `LICENSE`).
